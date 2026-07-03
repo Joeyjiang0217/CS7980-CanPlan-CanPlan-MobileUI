@@ -46,7 +46,7 @@ export default function ReportsScreen() {
 
   const handleGenerate = () => {
     generateMutation.mutate(
-      { userId, from: isoDaysAgo(presetDays), to: isoDaysAgo(0) },
+      { userId, from: isoDaysAgo(presetDays - 1), to: isoDaysAgo(0) },
       {
         onSuccess: (report) =>
           navigation.navigate('ReportView', { userId, reportId: report.reportId }),
