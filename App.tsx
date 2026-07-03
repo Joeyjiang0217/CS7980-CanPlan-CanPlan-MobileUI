@@ -23,6 +23,7 @@ import VerifyEmailScreen from './src/screens/auth/VerifyEmailScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import CategoriesScreen from './src/screens/categories/CategoriesScreen';
+import ReportsScreen from './src/screens/reports/ReportsScreen';
 import ReportViewScreen from './src/screens/reports/ReportViewScreen';
 import AllTasksScreen from './src/screens/tasks/AllTasksScreen';
 import CreateTaskScreen from './src/screens/tasks/CreateTaskScreen';
@@ -102,6 +103,7 @@ function RootStack() {
           />
           <Stack.Screen name="CreateTaskStep" component={CreateTaskStepScreen} />
           <Stack.Screen name="ReorderSteps" component={ReorderStepsScreen} />
+          <Stack.Screen name="Reports" component={ReportsScreen} />
           <Stack.Screen name="ReportView" component={ReportViewScreen} />
         </>
       )}
