@@ -165,7 +165,7 @@ export type AiTaskGenerationSource = 'CORPUS' | 'UNGROUNDED_AI';
 
 /**
  * Preview step from createAiTask. Citations exist on the wire but this app never
- * fetches them (primary users have cognitive disabilities; sources add load).
+ * fetches them (the UI stays deliberately minimal to reduce cognitive load).
  */
 export interface GeneratedAiTaskStep {
   text: string;

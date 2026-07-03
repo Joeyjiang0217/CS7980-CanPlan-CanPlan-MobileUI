@@ -855,7 +855,7 @@ export default function CreateTaskScreen() {
   };
 
   const handleGenerateAiSteps = async () => {
-    if (!taskId || !trimmedTitle || isBusy) {
+    if (!taskId || !trimmedTitle || isBusy || steps.length > 0) {
       return;
     }
 
@@ -867,32 +867,40 @@ export default function CreateTaskScreen() {
         query: trimmedTitle,
         groundingMode: 'ALLOW_UNGROUNDED_FALLBACK',
       });
-      if (generated.steps.length === 0) {
+      const stepTexts = generated.steps
+        .map((generatedStep) => generatedStep.text.trim())
+        .filter((text) => text.length > 0);
+      if (stepTexts.length === 0) {
         throw new Error('AI could not create steps for this task. Please try again or add steps yourself.');
+      }
+      // Set before persisting: the notice only renders once steps exist, and a
+      // partially created batch is still AI-generated.
+      if (!generated.grounded) {
+        setAiStepsNotice(true);
       }
 
       // This screen's steps are server-backed (synced from useTaskSteps), so
       // persist each generated step; local-only entries would be overwritten.
-      const createdSteps: DraftStep[] = [];
-      for (const [index, generatedStep] of generated.steps.entries()) {
+      // Append to local state per step so a partial failure still shows what
+      // was created and the AI card stays hidden instead of re-creating order 1.
+      for (const [index, text] of stepTexts.entries()) {
         const createdStep = await createTaskStepMutation.mutateAsync({
           taskId,
           order: index + 1,
-          text: generatedStep.text,
+          text,
         });
         if (!createdStep) {
           throw new Error('Some steps could not be added. Please review the list below.');
         }
-        createdSteps.push({
-          stepId: createdStep.stepId,
-          order: createdStep.order,
-          text: createdStep.text,
-          mediaAssets: createdStep.mediaAssets,
-        });
-      }
-      setSteps(createdSteps);
-      if (!generated.grounded) {
-        setAiStepsNotice(true);
+        setSteps((currentSteps) => [
+          ...currentSteps,
+          {
+            stepId: createdStep.stepId,
+            order: createdStep.order,
+            text: createdStep.text,
+            mediaAssets: createdStep.mediaAssets,
+          },
+        ]);
       }
     } catch (error) {
       setInlineError(errorMessage(error));
@@ -1069,7 +1077,9 @@ export default function CreateTaskScreen() {
           />
         </View>
 
-        {taskId && (steps.length === 0 || busyAction === 'ai-steps') ? (
+        {/* isSuccess: never offer AI steps until the server confirms the task has none
+            (a failed steps query would otherwise leave steps=[] for a task that has some). */}
+        {taskId && existingStepsQuery.isSuccess && (steps.length === 0 || busyAction === 'ai-steps') ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Create steps with AI"
