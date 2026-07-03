@@ -27,6 +27,7 @@ import type {
   DeleteCategoryInput,
   DeleteMediaAssetInput,
   DeleteTaskStepInput,
+  GenerateReportInput,
   GenerateTaskStepsInput,
   JsonValue,
   MediaAsset,
@@ -34,6 +35,7 @@ import type {
   MediaUploadTarget,
   PageInput,
   ReorderTaskStepsInput,
+  Report,
   SetAssignmentStepCompletionInput,
   SupportLink,
   Task,
@@ -90,6 +92,22 @@ function mapSupportLink(link: RawSupportLink): SupportLink {
   return {
     ...link,
     permissions: parseAwsJson(link.permissions, 'SupportLink.permissions'),
+  };
+}
+
+type RawReport = Omit<Report, 'scope' | 'dateRange'> & {
+  scope?: string | null;
+  dateRange?: string | null;
+};
+
+function mapReport(report: RawReport): Report {
+  return {
+    ...report,
+    scope: parseAwsJson(report.scope, 'Report.scope') as unknown as Report['scope'],
+    dateRange: parseAwsJson(
+      report.dateRange,
+      'Report.dateRange',
+    ) as unknown as Report['dateRange'],
   };
 }
 
@@ -470,5 +488,32 @@ export const canPlanApi = {
       { input: GenerateTaskStepsInput }
     >(operations.GENERATE_TASK_STEPS, { input });
     return data.generateTaskSteps;
+  },
+
+  async listReports(userId: string, page: PageInput = {}): Promise<Connection<Report>> {
+    const data = await graphqlRequest<
+      { listReports: Connection<RawReport> },
+      { userId: string } & PageInput
+    >(operations.LIST_REPORTS, { userId, ...pageVariables(page) });
+    return mapConnection(data.listReports, mapReport);
+  },
+
+  async getReportDownloadUrl(
+    userId: string,
+    reportId: string,
+  ): Promise<MediaDownloadTarget> {
+    const data = await graphqlRequest<
+      { getReportDownloadUrl: MediaDownloadTarget },
+      { userId: string; reportId: string }
+    >(operations.GET_REPORT_DOWNLOAD_URL, { userId, reportId });
+    return data.getReportDownloadUrl;
+  },
+
+  async generateReport(input: GenerateReportInput): Promise<Report> {
+    const data = await graphqlRequest<
+      { generateReport: RawReport },
+      { input: GenerateReportInput }
+    >(operations.GENERATE_REPORT, { input });
+    return mapReport(data.generateReport);
   },
 };
