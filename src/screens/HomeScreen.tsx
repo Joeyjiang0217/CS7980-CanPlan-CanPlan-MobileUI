@@ -132,6 +132,13 @@ export default function HomeScreen() {
             subtitle="See your scheduled tasks"
             onPress={() => console.log('TODO: Calendar screen')}
           />
+          {profile?.role === 'SUPPORT_PERSON' ? (
+            <DestinationCard
+              title="Reports"
+              subtitle="Progress reports for people you support"
+              onPress={() => navigation.navigate('ReportPeople')}
+            />
+          ) : null}
         </View>
       </ScrollView>
 

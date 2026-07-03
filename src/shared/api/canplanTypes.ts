@@ -372,3 +372,106 @@ export interface GenerateTaskStepsInput {
     organizationId?: string | null;
   } | null;
 }
+
+// ─── AI progress reports ────────────────────────────────────────────────────
+
+export interface ReportScope {
+  userId: string;
+}
+
+export interface ReportDateRange {
+  /** AWSDate strings (YYYY-MM-DD), inclusive. */
+  from: string;
+  to: string;
+}
+
+/**
+ * Report metadata row. `scope` / `dateRange` travel as AWSJSON strings on the
+ * wire; the API client parses them into objects before returning.
+ */
+export interface Report {
+  reportId: string;
+  scope?: ReportScope | null;
+  dateRange?: ReportDateRange | null;
+  s3Key?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+}
+
+export interface GenerateReportInput {
+  userId: string;
+  /** YYYY-MM-DD, inclusive; the backend caps the span at 366 days. */
+  from: string;
+  to: string;
+}
+
+/** Deterministic statistics computed by the backend over a date range. */
+export interface ReportStats {
+  meta: {
+    userId: string;
+    from: string;
+    to: string;
+    /** Rates cover attempted (acted-on) instances only. */
+    basis: 'attempted-instances-only';
+    totalInstances: number;
+  };
+  completion: {
+    completed: number;
+    skipped: number;
+    cancelled: number;
+    overdue: number;
+    inProgress: number;
+    toDo: number;
+    /** 0–1 fraction, rounded to 4 decimals. */
+    completionRate: number;
+  };
+  trend: Array<{ weekStart: string; completed: number; total: number; completionRate: number }>;
+  byCategory: Array<{
+    categoryId: string;
+    categoryName: string;
+    completed: number;
+    total: number;
+    completionRate: number;
+  }>;
+  byTask: Array<{
+    taskId: string;
+    title: string;
+    completed: number;
+    total: number;
+    completionRate: number;
+  }>;
+  stepDwell: Array<{
+    taskId: string;
+    title: string;
+    stepOrder: number;
+    stepText: string;
+    samples: number;
+    avgSeconds: number;
+  }>;
+  focus: {
+    byTask: Array<{ taskId: string; title: string; samples: number; avgActiveSeconds: number }>;
+    focusRatio: number | null;
+  };
+  skipPatterns: {
+    byTask: Array<{ taskId: string; title: string; skipped: number }>;
+    byHour: number[];
+  };
+  abandonment: Array<{
+    instanceId: string;
+    taskId: string;
+    title: string;
+    stalledAtStepOrder: number | null;
+  }>;
+  timeOfDay: number[];
+}
+
+/** The full report JSON stored in S3: stats + the AI narrative. */
+export interface ReportDocument {
+  reportId: string;
+  scope: ReportScope;
+  dateRange: ReportDateRange;
+  createdBy: string;
+  createdAt: string;
+  stats: ReportStats;
+  narrative: string;
+}

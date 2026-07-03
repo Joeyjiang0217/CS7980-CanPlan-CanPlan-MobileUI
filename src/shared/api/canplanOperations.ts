@@ -302,3 +302,28 @@ export const CREATE_AI_TASK = /* GraphQL */ `
     }
   }
 `;
+
+const REPORT_FIELDS = /* GraphQL */ `
+  reportId scope dateRange s3Key createdBy createdAt
+`;
+
+export const LIST_REPORTS = /* GraphQL */ `
+  query ListReports($userId: ID!, $limit: Int, $nextToken: String) {
+    listReports(userId: $userId, limit: $limit, nextToken: $nextToken) {
+      items { ${REPORT_FIELDS} }
+      nextToken
+    }
+  }
+`;
+
+export const GET_REPORT_DOWNLOAD_URL = /* GraphQL */ `
+  query GetReportDownloadUrl($userId: ID!, $reportId: ID!) {
+    getReportDownloadUrl(userId: $userId, reportId: $reportId) { downloadUrl s3Key expiresIn }
+  }
+`;
+
+export const GENERATE_REPORT = /* GraphQL */ `
+  mutation GenerateReport($input: GenerateReportInput!) {
+    generateReport(input: $input) { ${REPORT_FIELDS} }
+  }
+`;

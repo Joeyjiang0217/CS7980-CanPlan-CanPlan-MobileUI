@@ -51,4 +51,13 @@ export const queryKeys = {
   ai: {
     taskSteps: ['ai', 'taskSteps'] as const,
   },
+  reports: {
+    all: ['reports'] as const,
+    list: (userId: string, limit?: number) =>
+      ['reports', 'list', userId, limit] as const,
+    document: (userId: string, reportId: string) =>
+      ['reports', 'document', userId, reportId] as const,
+    linkedPrimaryUsers: (supporterId: string) =>
+      ['reports', 'linkedPrimaryUsers', supporterId] as const,
+  },
 };
