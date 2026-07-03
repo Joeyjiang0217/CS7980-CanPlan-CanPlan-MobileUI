@@ -159,6 +159,36 @@ export interface TaskStepsResponse {
   outputTokens?: number | null;
 }
 
+export type AiTaskGroundingMode = 'GROUNDED_ONLY' | 'ALLOW_UNGROUNDED_FALLBACK';
+
+export type AiTaskGenerationSource = 'CORPUS' | 'UNGROUNDED_AI';
+
+/**
+ * Preview step from createAiTask. Citations exist on the wire but this app never
+ * fetches them (primary users have cognitive disabilities; sources add load).
+ */
+export interface GeneratedAiTaskStep {
+  text: string;
+}
+
+export interface GeneratedAiTask {
+  title: string;
+  steps: GeneratedAiTaskStep[];
+  /** false = ungrounded fallback (source UNGROUNDED_AI); the UI shows an AI notice. */
+  grounded: boolean;
+  source: AiTaskGenerationSource;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+}
+
+export interface CreateAiTaskInput {
+  query: string;
+  /** Omitted ⇒ backend defaults to GROUNDED_ONLY; this app always sends ALLOW_UNGROUNDED_FALLBACK. */
+  groundingMode?: AiTaskGroundingMode;
+  /** Optional 1..20; this app never sends it (AI picks the count). */
+  stepCount?: number;
+}
+
 export interface Connection<T> {
   items: T[];
   nextToken?: string | null;

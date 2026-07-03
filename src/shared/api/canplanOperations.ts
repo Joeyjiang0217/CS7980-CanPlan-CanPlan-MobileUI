@@ -292,3 +292,13 @@ export const GENERATE_TASK_STEPS = /* GraphQL */ `
     }
   }
 `;
+
+export const CREATE_AI_TASK = /* GraphQL */ `
+  mutation CreateAiTask($input: CreateAiTaskInput!) {
+    createAiTask(input: $input) {
+      title
+      steps { text }
+      grounded source inputTokens outputTokens
+    }
+  }
+`;
