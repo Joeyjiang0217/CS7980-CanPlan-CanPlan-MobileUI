@@ -1105,7 +1105,7 @@ export default function CreateTaskScreen() {
             )}
           </Pressable>
         ) : null}
-        {aiStepsNotice ? (
+        {steps.length > 0 && aiStepsNotice ? (
           <View accessibilityRole="alert" style={styles.aiNotice}>
             <Ionicons name="sparkles-outline" size={18} color={colors.warning} />
             <Text style={styles.aiNoticeText}>
