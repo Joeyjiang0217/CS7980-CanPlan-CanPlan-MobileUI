@@ -14,6 +14,7 @@ import type {
   AssignmentStep,
   Category,
   Connection,
+  CreateAiTaskInput,
   CreateAssignmentInput,
   CreateCategoryInput,
   CreateMediaAssetInput,
@@ -27,6 +28,7 @@ import type {
   DeleteCategoryInput,
   DeleteMediaAssetInput,
   DeleteTaskStepInput,
+  GeneratedAiTask,
   GenerateReportInput,
   GenerateTaskStepsInput,
   JsonValue,
@@ -488,6 +490,14 @@ export const canPlanApi = {
       { input: GenerateTaskStepsInput }
     >(operations.GENERATE_TASK_STEPS, { input });
     return data.generateTaskSteps;
+  },
+
+  async createAiTask(input: CreateAiTaskInput): Promise<GeneratedAiTask> {
+    const data = await graphqlRequest<
+      { createAiTask: GeneratedAiTask },
+      { input: CreateAiTaskInput }
+    >(operations.CREATE_AI_TASK, { input });
+    return data.createAiTask;
   },
 
   async listReports(userId: string, page: PageInput = {}): Promise<Connection<Report>> {

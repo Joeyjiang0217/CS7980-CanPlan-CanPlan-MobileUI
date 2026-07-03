@@ -25,8 +25,10 @@ import {
 import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useCreateAiTask } from '../../features/ai/hooks/useCreateAiTask';
 import {
   useCreateTask,
+  useCreateTaskStep,
   useDeleteTask,
   useDeleteTaskStep,
   useTaskSteps,
@@ -365,6 +367,8 @@ export default function CreateTaskScreen() {
   const deleteTaskStepMutation = useDeleteTaskStep();
   const createCoverUploadUrlMutation = useCreateTaskCoverImageUploadUrl();
   const deleteMediaAssetMutation = useDeleteMediaAsset();
+  const createAiTaskMutation = useCreateAiTask();
+  const createTaskStepMutation = useCreateTaskStep();
   const existingTaskQuery = useTask(existingTaskId ?? '');
   const [taskId, setTaskId] = useState<string>();
   const activeTaskId = existingTaskId ?? taskId ?? '';
@@ -405,6 +409,7 @@ export default function CreateTaskScreen() {
   const [exitDestination, setExitDestination] = useState<'all-tasks' | 'back'>();
   const [busyAction, setBusyAction] = useState<string>();
   const [inlineError, setInlineError] = useState<string>();
+  const [aiStepsNotice, setAiStepsNotice] = useState(false);
   const [hydratedTaskId, setHydratedTaskId] = useState<string>();
   const categoriesQuery = useMyCategories(Boolean(categoryOwnerId));
   const taskOperationRef = useRef<string | undefined>(undefined);
@@ -412,6 +417,8 @@ export default function CreateTaskScreen() {
 
   const isBusy =
     Boolean(busyAction) ||
+    createAiTaskMutation.isPending ||
+    createTaskStepMutation.isPending ||
     createTaskMutation.isPending ||
     deleteTaskMutation.isPending ||
     updateTaskMutation.isPending ||
@@ -847,6 +854,53 @@ export default function CreateTaskScreen() {
     }
   };
 
+  const handleGenerateAiSteps = async () => {
+    if (!taskId || !trimmedTitle || isBusy) {
+      return;
+    }
+
+    setBusyAction('ai-steps');
+    setInlineError(undefined);
+    setAiStepsNotice(false);
+    try {
+      const generated = await createAiTaskMutation.mutateAsync({
+        query: trimmedTitle,
+        groundingMode: 'ALLOW_UNGROUNDED_FALLBACK',
+      });
+      if (generated.steps.length === 0) {
+        throw new Error('AI could not create steps for this task. Please try again or add steps yourself.');
+      }
+
+      // This screen's steps are server-backed (synced from useTaskSteps), so
+      // persist each generated step; local-only entries would be overwritten.
+      const createdSteps: DraftStep[] = [];
+      for (const [index, generatedStep] of generated.steps.entries()) {
+        const createdStep = await createTaskStepMutation.mutateAsync({
+          taskId,
+          order: index + 1,
+          text: generatedStep.text,
+        });
+        if (!createdStep) {
+          throw new Error('Some steps could not be added. Please review the list below.');
+        }
+        createdSteps.push({
+          stepId: createdStep.stepId,
+          order: createdStep.order,
+          text: createdStep.text,
+          mediaAssets: createdStep.mediaAssets,
+        });
+      }
+      setSteps(createdSteps);
+      if (!generated.grounded) {
+        setAiStepsNotice(true);
+      }
+    } catch (error) {
+      setInlineError(errorMessage(error));
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
   const handleDiscardDraft = async () => {
     if (!taskId || isBusy) {
       return;
@@ -1014,6 +1068,51 @@ export default function CreateTaskScreen() {
             }}
           />
         </View>
+
+        {taskId && (steps.length === 0 || busyAction === 'ai-steps') ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Create steps with AI"
+            accessibilityState={{ disabled: isBusy, busy: busyAction === 'ai-steps' }}
+            disabled={isBusy}
+            onPress={() => {
+              void handleGenerateAiSteps();
+            }}
+            style={({ pressed }) => [
+              styles.aiSuggestCard,
+              pressed && !isBusy ? styles.addPhotoActionPressed : null,
+              isBusy && busyAction !== 'ai-steps' ? styles.controlDisabled : null,
+            ]}
+          >
+            {busyAction === 'ai-steps' ? (
+              <>
+                <ActivityIndicator color={colors.primary} />
+                <View style={styles.aiSuggestCopy}>
+                  <Text style={styles.aiSuggestTitle}>Creating steps…</Text>
+                  <Text style={styles.aiSuggestDescription}>This can take a few seconds.</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <Ionicons name="sparkles-outline" size={24} color={colors.primary} />
+                <View style={styles.aiSuggestCopy}>
+                  <Text style={styles.aiSuggestTitle}>Create the steps with AI</Text>
+                  <Text style={styles.aiSuggestDescription}>
+                    Tap to let AI suggest steps. You can edit or delete them after.
+                  </Text>
+                </View>
+              </>
+            )}
+          </Pressable>
+        ) : null}
+        {steps.length > 0 && aiStepsNotice ? (
+          <View accessibilityRole="alert" style={styles.aiNotice}>
+            <Ionicons name="sparkles-outline" size={18} color={colors.warning} />
+            <Text style={styles.aiNoticeText}>
+              These steps were created by AI, not from CanPlan&apos;s guidance. Please check each one.
+            </Text>
+          </View>
+        ) : null}
 
         <Pressable
           accessibilityRole="button"
@@ -1692,6 +1791,43 @@ const styles = StyleSheet.create({
   addStepText: {
     ...typography.heading,
     color: colors.primary,
+  },
+  aiSuggestCard: {
+    minHeight: 76,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg + spacing.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceWarm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  aiSuggestCopy: {
+    flex: 1,
+  },
+  aiSuggestTitle: {
+    ...typography.bodyStrong,
+    color: colors.primary,
+  },
+  aiSuggestDescription: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+  },
+  aiNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(181, 104, 11, 0.08)',
+  },
+  aiNoticeText: {
+    flex: 1,
+    ...typography.caption,
+    color: colors.warning,
   },
   disabledText: {
     color: colors.disabled,

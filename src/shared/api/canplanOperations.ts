@@ -293,6 +293,16 @@ export const GENERATE_TASK_STEPS = /* GraphQL */ `
   }
 `;
 
+export const CREATE_AI_TASK = /* GraphQL */ `
+  mutation CreateAiTask($input: CreateAiTaskInput!) {
+    createAiTask(input: $input) {
+      title
+      steps { text }
+      grounded source inputTokens outputTokens
+    }
+  }
+`;
+
 const REPORT_FIELDS = /* GraphQL */ `
   reportId scope dateRange s3Key createdBy createdAt
 `;
