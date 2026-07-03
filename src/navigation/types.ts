@@ -52,4 +52,9 @@ export type MainStackParamList = {
     | undefined;
   CreateTaskStep: { taskId: string; stepId?: string };
   ReorderSteps: { taskId: string };
+  /** Supporter-only: pick which cared-for user's reports to view. */
+  ReportPeople: undefined;
+  /** Report history + generation for one cared-for user. */
+  Reports: { userId: string; displayName: string };
+  ReportView: { userId: string; reportId: string };
 };
