@@ -18,7 +18,20 @@ export default function CachedImage({
   uri,
   cacheKey,
   cachePolicy = 'memory-disk',
+  transition = 150,
   ...rest
 }: CachedImageProps) {
-  return <Image source={uri ? { uri, cacheKey } : null} cachePolicy={cachePolicy} {...rest} />;
+  return (
+    <Image
+      source={uri ? { uri, cacheKey } : null}
+      // Stable identity so recycled tiles (e.g. the month grid) don't flash a
+      // previous cover before the correct one resolves.
+      recyclingKey={cacheKey}
+      // Fade the bytes in instead of popping — smoother when a URL/byte fetch
+      // completes a moment after mount.
+      transition={transition}
+      cachePolicy={cachePolicy}
+      {...rest}
+    />
+  );
 }

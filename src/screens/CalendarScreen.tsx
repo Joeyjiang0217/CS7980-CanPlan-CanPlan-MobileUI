@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  InteractionManager,
   Modal,
   Pressable,
   ScrollView,
@@ -18,6 +19,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useQueryClient } from '@tanstack/react-query';
+
+import { getTaskInstanceViews } from '../features/assignments/api/assignmentApi';
 import {
   useAssignmentsForUser,
   useTaskInstanceViews,
@@ -33,7 +37,7 @@ import {
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
 import { describeRepeat } from '../features/assignments/repeat';
-import { useMediaDownloadUrl } from '../features/media/hooks/useMedia';
+import { useMediaDownloadUrl, useMediaDownloadUrlMap } from '../features/media/hooks/useMedia';
 import { useTasksByOwner, useTaskSteps } from '../features/tasks/hooks/useTaskApi';
 import type { MainStackParamList } from '../navigation/types';
 import { getCurrentUserId } from '../shared/api/authTokenProvider';
@@ -44,6 +48,7 @@ import type {
 } from '../shared/api/canplanTypes';
 import BackButton from '../shared/components/BackButton';
 import CachedImage from '../shared/components/CachedImage';
+import { queryKeys } from '../shared/query/queryKeys';
 import { colors, radius, shadow, spacing, typography } from '../shared/theme/tokens';
 
 type CalendarNavigation = NativeStackNavigationProp<MainStackParamList, 'Calendar'>;
@@ -106,9 +111,13 @@ const formatShortDate = (iso: string) => {
   });
 };
 const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+const addMonths = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth() + n, 1);
 const startOfWeek = (d: Date) => addDays(d, -d.getDay());
 const isSameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
+const MONTH_PAGER_RADIUS = 60;
 
 // ── A task's cover image, resolved from its asset id ───────────────────────────
 
@@ -142,6 +151,46 @@ function TaskCover({
   );
 }
 
+// ── Off-screen cover prewarm ───────────────────────────────────────────────────
+
+/** Warms one cover's URL (react-query) + bytes (expo-image, keyed by assetId). */
+function CoverPrewarmCell({ taskId, assetId }: { taskId: string; assetId: string }) {
+  const download = useMediaDownloadUrl(taskId, assetId);
+  return (
+    <CachedImage
+      uri={download.data?.downloadUrl ?? null}
+      cacheKey={assetId}
+      style={styles.prewarmPixel}
+      transition={0}
+    />
+  );
+}
+
+/**
+ * Renders every task cover off-screen so both cache layers are warm before the
+ * user opens the month grid: the URL query is shared by key, and the bytes are
+ * cached by expo-image under `cacheKey` (= assetId) — the same key the grid reads,
+ * which `Image.prefetch` can't target on this expo-image version. Mounting is
+ * deferred until interactions settle so it never competes with the day view's
+ * first paint or with swiping between days. The set is tiny (one entry per task,
+ * not per day), so this stays cheap.
+ */
+function CoverPrewarmer({ covers }: { covers: ReadonlyArray<{ taskId: string; assetId: string }> }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const handle = InteractionManager.runAfterInteractions(() => setReady(true));
+    return () => handle.cancel();
+  }, []);
+  if (!ready || covers.length === 0) return null;
+  return (
+    <View style={styles.prewarmLayer} pointerEvents="none" accessibilityElementsHidden>
+      {covers.map(({ taskId, assetId }) => (
+        <CoverPrewarmCell key={`${taskId}:${assetId}`} taskId={taskId} assetId={assetId} />
+      ))}
+    </View>
+  );
+}
+
 // ── WeChat-style thumbnail collage for a calendar day (up to 9 covers) ─────────
 
 const THUMB_SIZE = 48;
@@ -152,9 +201,14 @@ type DayThumbItem = { taskId: string; gray: boolean };
 function DayThumbGrid({
   items,
   coverByTask,
+  coverUriByTask,
 }: {
   items: DayThumbItem[];
   coverByTask: Map<string, string | null | undefined>;
+  // taskId → resolved download URL, hoisted to one useMediaDownloadUrlMap call
+  // at the screen level. Cells stay hook-free: ~30 days × up to 9 covers × 3
+  // pages of per-cell query hooks is what froze the pager on mount/swipe.
+  coverUriByTask: ReadonlyMap<string, string | null>;
 }) {
   // Each cover gets its own equal square tile (WeChat-group-avatar style) so
   // covers show in full rather than being stretched into tall side-by-side
@@ -163,18 +217,27 @@ function DayThumbGrid({
   const tile = Math.floor(THUMB_SIZE / cols);
   return (
     <View style={styles.monthThumb}>
-      {items.map(({ taskId, gray }, index) => (
-        <View key={`${taskId}-${index}`} style={{ width: tile, height: tile }}>
-          <TaskCover
-            taskId={taskId}
-            assetId={coverByTask.get(taskId)}
-            style={StyleSheet.absoluteFill}
-            iconSize={10}
-          />
-          {/* Not-yet-materialized days read as grey; materialized show in colour. */}
-          {gray ? <View style={styles.thumbGrayVeil} pointerEvents="none" /> : null}
-        </View>
-      ))}
+      {items.map(({ taskId, gray }, index) => {
+        const assetId = coverByTask.get(taskId);
+        return (
+          <View key={`${taskId}-${index}`} style={{ width: tile, height: tile }}>
+            <View style={[StyleSheet.absoluteFill, styles.coverPlaceholder]}>
+              <Ionicons name="image-outline" size={10} color={colors.disabled} />
+              {assetId ? (
+                <CachedImage
+                  uri={coverUriByTask.get(taskId) ?? null}
+                  cacheKey={assetId}
+                  style={StyleSheet.absoluteFill}
+                  contentFit="cover"
+                  transition={0}
+                />
+              ) : null}
+            </View>
+            {/* Not-yet-materialized days read as grey; materialized show in colour. */}
+            {gray ? <View style={styles.thumbGrayVeil} pointerEvents="none" /> : null}
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -246,10 +309,24 @@ function AssignmentCard({
     </View>
   );
 
+  // Once an occurrence is resolved we lose its OVERDUE status, so infer "was
+  // overdue" from a done/skipped occurrence whose scheduled slot has passed —
+  // and keep an Overdue badge to the right of the Done/Skipped one.
+  const wasOverdue =
+    (bucket === 'done' || bucket === 'skipped') &&
+    new Date(view.scheduledFor).getTime() < Date.now();
+
   const statusTag = (
-    <View style={[styles.statusTag, { backgroundColor: STATUS_ACCENT[bucket] }]}>
-      <Text style={styles.statusTagText}>{STATUS_LABEL[bucket]}</Text>
-    </View>
+    <>
+      <View style={[styles.statusTag, { backgroundColor: STATUS_ACCENT[bucket] }]}>
+        <Text style={styles.statusTagText}>{STATUS_LABEL[bucket]}</Text>
+      </View>
+      {wasOverdue ? (
+        <View style={[styles.statusTag, { backgroundColor: STATUS_ACCENT.overdue }]}>
+          <Text style={styles.statusTagText}>{STATUS_LABEL.overdue}</Text>
+        </View>
+      ) : null}
+    </>
   );
 
   return (
@@ -291,50 +368,50 @@ function AssignmentCard({
 
 // ── Month picker modal (opened from the eye icon) ──────────────────────────────
 
-function MonthPickerModal({
-  visible,
+// ── One month's grid (its own data query, one pager page) ──────────────────────
+
+// Memoized so the pager's silent recenter after a swipe doesn't re-render the
+// two pages whose props didn't change — with ~30 day cells each that re-render
+// is what made the settle stutter.
+const MonthGridPage = memo(function MonthGridPage({
+  monthDate,
+  width,
+  height,
   ownerId,
-  initialDate,
   coverByTask,
+  coverUriByTask,
   activeDates,
   today,
-  onClose,
+  showThumbnails,
   onSelectDay,
 }: {
-  visible: boolean;
+  monthDate: Date;
+  width: number;
+  height: number;
   ownerId: string;
-  initialDate: Date;
   coverByTask: Map<string, string | null | undefined>;
+  coverUriByTask: ReadonlyMap<string, string | null>;
   activeDates: ReadonlyMap<string, string>;
   today: Date;
-  onClose: () => void;
+  showThumbnails: boolean;
   onSelectDay: (date: Date) => void;
 }) {
-  const insets = useSafeAreaInsets();
   const statusOverrides = useOccurrenceStatuses();
-  const [viewDate, setViewDate] = useState(initialDate);
-
-  // Re-sync to the current selection whenever the sheet is reopened.
-  useEffect(() => {
-    if (visible) {
-      setViewDate(initialDate);
-    }
-  }, [visible, initialDate]);
-
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
   const monthStart = useMemo(() => new Date(year, month, 1), [year, month]);
   const monthEnd = useMemo(() => new Date(year, month + 1, 0), [year, month]);
 
+  // One request per month, keyed by month, so navigating only fetches the new
+  // month and previously seen months stay cached (5-min staleTime).
   const viewsQuery = useTaskInstanceViews(
-    visible ? ownerId : '',
+    ownerId,
     toISODate(monthStart),
     toISODate(monthEnd),
   );
 
   // date string → up to 9 distinct task covers scheduled that day, each flagged
-  // gray when that day's occurrence isn't materialized yet. A materialized
-  // occurrence of the same task wins (color) over a gray one.
+  // gray when that day's occurrence isn't materialized yet.
   const tasksByDate = useMemo(() => {
     const todayISO = toISODate(today);
     const byDate = new Map<string, Map<string, boolean>>();
@@ -381,7 +458,263 @@ function MonthPickerModal({
     ];
   }, [monthStart, monthEnd]);
 
-  const monthLabel = viewDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const [thumbRenderLimit, setThumbRenderLimit] = useState(0);
+  useEffect(() => {
+    if (!showThumbnails) {
+      setThumbRenderLimit(0);
+      return;
+    }
+
+    const daysInMonth = monthEnd.getDate();
+    const firstBatch = Math.min(daysInMonth, 14);
+    setThumbRenderLimit(firstBatch);
+    let cancelled = false;
+    let raf: ReturnType<typeof requestAnimationFrame> | null = null;
+    raf = requestAnimationFrame(() => {
+      if (!cancelled) {
+        setThumbRenderLimit(daysInMonth);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (raf) {
+        cancelAnimationFrame(raf);
+      }
+    };
+  }, [showThumbnails, monthEnd, viewsQuery.dataUpdatedAt]);
+
+  return (
+    <View style={[styles.modalGridContent, { width, height: height || undefined }]}>
+      <View style={styles.grid}>
+        {cells.map((day, index) => {
+          if (day === null) {
+            return <View key={`blank-${index}`} style={styles.monthCell} />;
+          }
+          const date = new Date(year, month, day);
+          const iso = toISODate(date);
+          const dayItems = tasksByDate.get(iso) ?? [];
+          const shouldRenderThumb = dayItems.length > 0 && day <= thumbRenderLimit;
+          return (
+            <Pressable
+              key={day}
+              accessibilityRole="button"
+              accessibilityLabel={date.toDateString()}
+              onPress={() => onSelectDay(date)}
+              style={styles.monthCell}
+            >
+              {shouldRenderThumb ? (
+                <DayThumbGrid
+                  items={dayItems}
+                  coverByTask={coverByTask}
+                  coverUriByTask={coverUriByTask}
+                />
+              ) : null}
+              <Text
+                style={[
+                  styles.monthDayText,
+                  shouldRenderThumb ? styles.monthDayTextOnImage : null,
+                ]}
+              >
+                {day}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+});
+
+// ── Month picker modal (opened from the eye icon) ──────────────────────────────
+
+function MonthPickerModal({
+  visible,
+  ownerId,
+  initialDate,
+  coverByTask,
+  coverUriByTask,
+  activeDates,
+  today,
+  onClose,
+  onSelectDay,
+}: {
+  visible: boolean;
+  ownerId: string;
+  initialDate: Date;
+  coverByTask: Map<string, string | null | undefined>;
+  coverUriByTask: ReadonlyMap<string, string | null>;
+  activeDates: ReadonlyMap<string, string>;
+  today: Date;
+  onClose: () => void;
+  onSelectDay: (date: Date) => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const [baseMonth, setBaseMonth] = useState(() => startOfMonth(initialDate));
+  const [currentIndex, setCurrentIndex] = useState(MONTH_PAGER_RADIUS);
+  const [pagerHeight, setPagerHeight] = useState(0);
+  const pagerRef = useRef<FlatList<Date>>(null);
+  const pagingFromButtonRef = useRef(false);
+  const pendingButtonIndexRef = useRef<number | null>(null);
+  const pagingResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Re-sync to the current selection whenever the sheet is reopened.
+  useEffect(() => {
+    if (visible) {
+      setBaseMonth(startOfMonth(initialDate));
+      setCurrentIndex(MONTH_PAGER_RADIUS);
+    }
+  }, [visible, initialDate]);
+
+  const pages = useMemo(
+    () =>
+      Array.from({ length: MONTH_PAGER_RADIUS * 2 + 1 }, (_, index) =>
+        addMonths(baseMonth, index - MONTH_PAGER_RADIUS),
+      ),
+    [baseMonth],
+  );
+  const currentMonthDate = pages[currentIndex] ?? baseMonth;
+  const year = currentMonthDate.getFullYear();
+  const month = currentMonthDate.getMonth();
+  const monthLabel = currentMonthDate.toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+  const queryClient = useQueryClient();
+  const currentMonthQueryKey = useMemo(() => {
+    const start = toISODate(new Date(year, month, 1));
+    const end = toISODate(new Date(year, month + 1, 0));
+    return queryKeys.assignments.instanceViews(ownerId, start, end);
+  }, [ownerId, year, month]);
+
+  // Warm the two neighbouring months in the background (after the open/settle
+  // interaction) so swiping to them is instant, without making the initial open
+  // wait on all three. The centered month is fetched eagerly by its own page.
+  useEffect(() => {
+    if (!visible || !ownerId) return;
+    const handle = InteractionManager.runAfterInteractions(() => {
+      for (const offset of [-1, 1]) {
+        const start = toISODate(new Date(year, month + offset, 1));
+        const end = toISODate(new Date(year, month + offset + 1, 0));
+        void queryClient.prefetchQuery({
+          queryKey: queryKeys.assignments.instanceViews(ownerId, start, end),
+          queryFn: () => getTaskInstanceViews(ownerId, start, end),
+        });
+      }
+    });
+    return () => handle.cancel();
+  }, [visible, ownerId, year, month, queryClient]);
+
+  // First open can still wait for the slide interaction if there is no month
+  // cache yet. Cached/reopened grids mount immediately so the sheet is not blank.
+  const [gridReady, setGridReady] = useState(false);
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+    if (!ownerId || gridReady || queryClient.getQueryData(currentMonthQueryKey)) {
+      setGridReady(true);
+      return;
+    }
+    const handle = InteractionManager.runAfterInteractions(() => setGridReady(true));
+    return () => handle.cancel();
+  }, [visible, ownerId, gridReady, currentMonthQueryKey, queryClient]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const id = requestAnimationFrame(() => {
+      pagerRef.current?.scrollToOffset({
+        offset: width * MONTH_PAGER_RADIUS,
+        animated: false,
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [visible, baseMonth, width]);
+
+  const finishButtonPaging = useCallback(() => {
+    pagingFromButtonRef.current = false;
+    pendingButtonIndexRef.current = null;
+    if (pagingResetTimerRef.current) {
+      clearTimeout(pagingResetTimerRef.current);
+      pagingResetTimerRef.current = null;
+    }
+  }, []);
+
+  const handleSettle = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const page = Math.round(event.nativeEvent.contentOffset.x / width);
+      const maxIndex = pages.length - 1;
+      setCurrentIndex(Math.max(0, Math.min(maxIndex, page)));
+      finishButtonPaging();
+    },
+    [finishButtonPaging, pages.length, width],
+  );
+
+  const handleMonthStep = useCallback(
+    (step: -1 | 1) => {
+      if (pagingFromButtonRef.current) return;
+      if (!pagerRef.current || pagerHeight <= 0 || !gridReady) {
+        setCurrentIndex((index) => Math.max(0, Math.min(pages.length - 1, index + step)));
+        return;
+      }
+      const nextIndex = Math.max(0, Math.min(pages.length - 1, currentIndex + step));
+      if (nextIndex === currentIndex) return;
+      pagingFromButtonRef.current = true;
+      pendingButtonIndexRef.current = nextIndex;
+      pagerRef.current.scrollToOffset({
+        offset: width * nextIndex,
+        animated: true,
+      });
+      pagingResetTimerRef.current = setTimeout(() => {
+        setCurrentIndex(pendingButtonIndexRef.current ?? nextIndex);
+        pagingFromButtonRef.current = false;
+        pendingButtonIndexRef.current = null;
+        pagingResetTimerRef.current = null;
+      }, 700);
+    },
+    [currentIndex, gridReady, pagerHeight, pages.length, width],
+  );
+
+  const keyMonthPage = useCallback((d: Date) => toISODate(d), []);
+
+  const renderMonthPage = useCallback(
+    ({ item }: { item: Date }) => (
+      <MonthGridPage
+        monthDate={item}
+        width={width}
+        height={pagerHeight}
+        ownerId={ownerId}
+        coverByTask={coverByTask}
+        coverUriByTask={coverUriByTask}
+        activeDates={activeDates}
+        today={today}
+        showThumbnails={item.getFullYear() === year && item.getMonth() === month}
+        onSelectDay={onSelectDay}
+      />
+    ),
+    [
+      activeDates,
+      coverByTask,
+      coverUriByTask,
+      ownerId,
+      pagerHeight,
+      onSelectDay,
+      today,
+      width,
+      year,
+      month,
+    ],
+  );
+
+  useEffect(
+    () => () => {
+      if (pagingResetTimerRef.current) {
+        clearTimeout(pagingResetTimerRef.current);
+      }
+    },
+    [],
+  );
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -403,7 +736,7 @@ function MonthPickerModal({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Previous month"
-            onPress={() => setViewDate(new Date(year, month - 1, 1))}
+            onPress={() => handleMonthStep(-1)}
             style={({ pressed }) => [styles.monthArrow, pressed ? styles.chipPressed : null]}
             hitSlop={6}
           >
@@ -413,7 +746,7 @@ function MonthPickerModal({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Next month"
-            onPress={() => setViewDate(new Date(year, month + 1, 1))}
+            onPress={() => handleMonthStep(1)}
             style={({ pressed }) => [styles.monthArrow, pressed ? styles.chipPressed : null]}
             hitSlop={6}
           >
@@ -429,39 +762,33 @@ function MonthPickerModal({
           ))}
         </View>
 
-        <ScrollView contentContainerStyle={styles.modalGridContent}>
-          <View style={styles.grid}>
-            {cells.map((day, index) => {
-              if (day === null) {
-                return <View key={`blank-${index}`} style={styles.monthCell} />;
-              }
-              const date = new Date(year, month, day);
-              const iso = toISODate(date);
-              const dayItems = tasksByDate.get(iso) ?? [];
-              return (
-                <Pressable
-                  key={day}
-                  accessibilityRole="button"
-                  accessibilityLabel={date.toDateString()}
-                  onPress={() => onSelectDay(date)}
-                  style={styles.monthCell}
-                >
-                  {dayItems.length > 0 ? (
-                    <DayThumbGrid items={dayItems} coverByTask={coverByTask} />
-                  ) : null}
-                  <Text
-                    style={[
-                      styles.monthDayText,
-                      dayItems.length > 0 ? styles.monthDayTextOnImage : null,
-                    ]}
-                  >
-                    {day}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </ScrollView>
+        <View
+          style={styles.monthBody}
+          onLayout={(event) => setPagerHeight(event.nativeEvent.layout.height)}
+        >
+          {pagerHeight > 0 && gridReady ? (
+            <FlatList
+              ref={pagerRef}
+              data={pages}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              keyExtractor={keyMonthPage}
+              initialScrollIndex={MONTH_PAGER_RADIUS}
+              getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+              onMomentumScrollEnd={handleSettle}
+              initialNumToRender={5}
+              maxToRenderPerBatch={2}
+              windowSize={5}
+              onScrollToIndexFailed={({ index }) => {
+                requestAnimationFrame(() => {
+                  pagerRef.current?.scrollToOffset({ offset: width * index, animated: false });
+                });
+              }}
+              renderItem={renderMonthPage}
+            />
+          ) : null}
+        </View>
       </View>
     </Modal>
   );
@@ -619,10 +946,23 @@ export default function CalendarScreen() {
 
   const today = useMemo(() => new Date(), []);
   const selectedISO = toISODate(selected);
+  const selectedYear = selected.getFullYear();
+  const selectedMonth = selected.getMonth();
+  const queryClient = useQueryClient();
 
   const dayViewsQuery = useTaskInstanceViews(ownerId, selectedISO, selectedISO);
   const tasksQuery = useTasksByOwner(ownerId);
   const assignmentsQuery = useAssignmentsForUser(ownerId);
+
+  useEffect(() => {
+    if (!ownerId) return;
+    const start = toISODate(new Date(selectedYear, selectedMonth, 1));
+    const end = toISODate(new Date(selectedYear, selectedMonth + 1, 0));
+    void queryClient.prefetchQuery({
+      queryKey: queryKeys.assignments.instanceViews(ownerId, start, end),
+      queryFn: () => getTaskInstanceViews(ownerId, start, end),
+    });
+  }, [ownerId, selectedYear, selectedMonth, queryClient]);
 
   // assignmentId → its assignment, for the card's repeat icon + type label.
   const assignmentById = useMemo(() => {
@@ -649,6 +989,20 @@ export default function CalendarScreen() {
     }
     return map;
   }, [tasksQuery.data]);
+
+  // Distinct (taskId, assetId) covers to prewarm off-screen (one per task, not
+  // per day) so the month grid opens with URLs + bytes already cached.
+  const prewarmCovers = useMemo(() => {
+    const list: Array<{ taskId: string; assetId: string }> = [];
+    for (const [taskId, assetId] of coverByTask) {
+      if (assetId) list.push({ taskId, assetId });
+    }
+    return list;
+  }, [coverByTask]);
+
+  // One URL query per distinct task cover, resolved here and passed down as
+  // plain strings — month-grid cells render with zero hooks of their own.
+  const coverUriByTask = useMediaDownloadUrlMap(prewarmCovers);
 
   // UI-only status overrides (mark done / skip from the runner) win over the
   // server status so the occurrence moves buckets within the session.
@@ -846,11 +1200,14 @@ export default function CalendarScreen() {
         })}
       </View>
 
+      <CoverPrewarmer covers={prewarmCovers} />
+
       <MonthPickerModal
         visible={monthPickerVisible}
         ownerId={ownerId}
         initialDate={selected}
         coverByTask={coverByTask}
+        coverUriByTask={coverUriByTask}
         activeDates={activeDates}
         today={today}
         onClose={() => setMonthPickerVisible(false)}
@@ -1027,6 +1384,20 @@ const styles = StyleSheet.create({
   coverDimmed: {
     opacity: 0.4,
   },
+  // Off-screen, zero-footprint layer that mounts cover images purely to warm the
+  // URL + byte caches; positioned far off-screen and non-interactive.
+  prewarmLayer: {
+    position: 'absolute',
+    top: -10000,
+    left: -10000,
+    width: 0,
+    height: 0,
+    opacity: 0,
+  },
+  prewarmPixel: {
+    width: 1,
+    height: 1,
+  },
   taskBody: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1168,6 +1539,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     ...typography.caption,
     color: colors.textMuted,
+  },
+  monthBody: {
+    flex: 1,
   },
   modalGridContent: {
     paddingHorizontal: spacing.xl,
