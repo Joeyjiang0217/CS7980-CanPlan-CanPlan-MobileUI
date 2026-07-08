@@ -1,9 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Animated,
   Easing,
@@ -126,7 +125,54 @@ const daysBetween = (a: Date, b: Date) =>
   );
 
 const MONTH_PAGER_RADIUS = 60;
-const DAY_PAGER_RADIUS = 120;
+const DAY_PAGER_SIDE_BUFFER = 7;
+const DAY_PAGER_PAGE_COUNT = 21;
+const DAY_PAGER_REBASE_EDGE = 3;
+const dayPagerIndexForDate = (date: Date, weekStartDate: Date) =>
+  daysBetween(date, weekStartDate) + DAY_PAGER_SIDE_BUFFER;
+
+const calendarMountedDays = new Map<string, ReadonlySet<string>>();
+const calendarMountedDayListeners = new Set<() => void>();
+
+function mountedDaysStoreKey(ownerId: string | null | undefined) {
+  return ownerId ?? '__anonymous__';
+}
+
+function emitMountedDaysChange() {
+  calendarMountedDayListeners.forEach((listener) => listener());
+}
+
+function subscribeMountedDays(listener: () => void) {
+  calendarMountedDayListeners.add(listener);
+  return () => {
+    calendarMountedDayListeners.delete(listener);
+  };
+}
+
+function getMountedDaysSnapshot(storeKey: string, initialDateKey: string) {
+  const existing = calendarMountedDays.get(storeKey);
+  if (existing) return existing;
+  const initial = new Set([initialDateKey]);
+  calendarMountedDays.set(storeKey, initial);
+  return initial;
+}
+
+function markCalendarDayMounted(storeKey: string, dateKey: string) {
+  const current = calendarMountedDays.get(storeKey);
+  if (current?.has(dateKey)) return;
+  const next = new Set(current ?? []);
+  next.add(dateKey);
+  calendarMountedDays.set(storeKey, next);
+  emitMountedDaysChange();
+}
+
+function useCalendarMountedDays(storeKey: string, initialDateKey: string) {
+  const getSnapshot = useCallback(
+    () => getMountedDaysSnapshot(storeKey, initialDateKey),
+    [initialDateKey, storeKey],
+  );
+  return useSyncExternalStore(subscribeMountedDays, getSnapshot, getSnapshot);
+}
 
 // ── A task's cover image, resolved from its asset id ───────────────────────────
 
@@ -863,6 +909,38 @@ function MonthPickerModal({
 
 // ── One swipeable day page (its own list + data) ───────────────────────────────
 
+function DayLoadingSkeleton() {
+  return (
+    <View style={styles.skeletonWrap} pointerEvents="none" accessibilityElementsHidden>
+      {[0, 1, 2].map((item) => (
+        <View key={item} style={styles.skeletonGroup}>
+          <View style={styles.skeletonSlotHeader} />
+          <View style={styles.skeletonCard}>
+            <View style={styles.skeletonImage} />
+            <View style={styles.skeletonBody}>
+              <View style={styles.skeletonAccent} />
+              <View style={styles.skeletonTextBlock}>
+                <View style={[styles.skeletonLine, styles.skeletonTitleLine]} />
+                <View style={[styles.skeletonLine, styles.skeletonMetaLine]} />
+                <View style={[styles.skeletonLine, styles.skeletonStepsLine]} />
+              </View>
+              <View style={styles.skeletonPill} />
+            </View>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function DayPagePlaceholder({ width, height }: { width: number; height: number }) {
+  return (
+    <View style={[styles.dayPagePlaceholder, { width, height: height || undefined }]}>
+      <DayLoadingSkeleton />
+    </View>
+  );
+}
+
 function DayAssignmentsPage({
   date,
   width,
@@ -956,11 +1034,7 @@ function DayAssignmentsPage({
   const renderRow = useCallback(
     ({ item }: { item: DayRow }) => {
       if (item.kind === 'loading') {
-        return (
-          <View style={styles.stateBox}>
-            <ActivityIndicator color={colors.primary} />
-          </View>
-        );
+        return <DayLoadingSkeleton />;
       }
       if (item.kind === 'message') {
         return <Text style={styles.stateText}>{item.message}</Text>;
@@ -1031,6 +1105,8 @@ function DayAssignmentsPage({
   );
 }
 
+const MemoDayAssignmentsPage = memo(DayAssignmentsPage);
+
 export default function CalendarScreen() {
   const navigation = useNavigation<CalendarNavigation>();
   const insets = useSafeAreaInsets();
@@ -1058,23 +1134,10 @@ export default function CalendarScreen() {
 
   const today = useMemo(() => new Date(), []);
   const selectedISO = toISODate(selected);
-  const selectedYear = selected.getFullYear();
-  const selectedMonth = selected.getMonth();
-  const queryClient = useQueryClient();
 
   const dayViewsQuery = useTaskInstanceViews(ownerId, selectedISO, selectedISO);
   const tasksQuery = useTasksByOwner(ownerId);
   const assignmentsQuery = useAssignmentsForUser(ownerId);
-
-  useEffect(() => {
-    if (!ownerId) return;
-    const start = toISODate(new Date(selectedYear, selectedMonth, 1));
-    const end = toISODate(new Date(selectedYear, selectedMonth + 1, 0));
-    void queryClient.prefetchQuery({
-      queryKey: queryKeys.assignments.instanceViews(ownerId, start, end),
-      queryFn: () => getTaskInstanceViews(ownerId, start, end),
-    });
-  }, [ownerId, selectedYear, selectedMonth, queryClient]);
 
   // assignmentId → its assignment, for the card's repeat icon + type label.
   const assignmentById = useMemo(() => {
@@ -1139,22 +1202,40 @@ export default function CalendarScreen() {
     return result;
   }, [dayViewsQuery.data, statusOverrides]);
 
-  // Horizontal pager: use a stable date strip so swiping never has to rebuild
-  // data and jump back to the center page. Only the current page (and neighbours
-  // while dragging) render real task content below.
+  // Horizontal pager: keep three weeks of lightweight positions, but render
+  // real task pages only for dates the user has actually opened.
   const pagerRef = useRef<FlatList<Date>>(null);
   const dayCommitFrameRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
-  const dragStartIndexRef = useRef(DAY_PAGER_RADIUS);
+  const initialWeekStart = useMemo(() => startOfWeek(new Date()), []);
+  const initialDayPagerIndex = useMemo(
+    () => dayPagerIndexForDate(new Date(), initialWeekStart),
+    [initialWeekStart],
+  );
+  const pendingDayPagerIndexRef = useRef<number | null>(null);
   const programmaticDayScrollRef = useRef(false);
-  const [dayPagerBase, setDayPagerBase] = useState(() => new Date());
-  const [dayPagerIndex, setDayPagerIndex] = useState(DAY_PAGER_RADIUS);
+  const [dayPagerBase, setDayPagerBase] = useState(() => initialWeekStart);
+  const mountedDaysKey = useMemo(() => mountedDaysStoreKey(ownerId), [ownerId]);
+  const mountedDayPageKeys = useCalendarMountedDays(mountedDaysKey, selectedISO);
   const pages = useMemo(
     () =>
-      Array.from({ length: DAY_PAGER_RADIUS * 2 + 1 }, (_, index) =>
-        addDays(dayPagerBase, index - DAY_PAGER_RADIUS),
+      Array.from({ length: DAY_PAGER_PAGE_COUNT }, (_, index) =>
+        addDays(dayPagerBase, index - DAY_PAGER_SIDE_BUFFER),
       ),
     [dayPagerBase],
   );
+  const markDayPageMounted = useCallback(
+    (date: Date) => {
+      markCalendarDayMounted(mountedDaysKey, toISODate(date));
+    },
+    [mountedDaysKey],
+  );
+
+  useEffect(() => {
+    console.log('[Calendar] mounted day pages', {
+      storeKey: mountedDaysKey,
+      dates: [...mountedDayPageKeys].sort(),
+    });
+  }, [mountedDayPageKeys, mountedDaysKey]);
 
   const scheduleSelectedCommit = useCallback((target: Date) => {
     if (dayCommitFrameRef.current) {
@@ -1171,61 +1252,56 @@ export default function CalendarScreen() {
       const index = Math.max(0, Math.min(pages.length - 1, Math.round(event.nativeEvent.contentOffset.x / width)));
       const date = pages[index];
       if (date) {
+        const targetWeekStart = startOfWeek(date);
+        const targetIndex = dayPagerIndexForDate(date, targetWeekStart);
+        markDayPageMounted(date);
         programmaticDayScrollRef.current = false;
-        setDayPagerIndex(index);
-        dragStartIndexRef.current = index;
+        const shouldRebase =
+          index <= DAY_PAGER_REBASE_EDGE || index >= pages.length - 1 - DAY_PAGER_REBASE_EDGE;
+        if (shouldRebase && toISODate(targetWeekStart) !== toISODate(dayPagerBase)) {
+          pendingDayPagerIndexRef.current = targetIndex;
+          setDayPagerBase(targetWeekStart);
+        }
         setVisualSelected(date);
         scheduleSelectedCommit(date);
       }
     },
-    [pages, scheduleSelectedCommit, width],
-  );
-
-  const handleDayPagerScroll = useCallback(
-    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (programmaticDayScrollRef.current) return;
-      const rawIndex = event.nativeEvent.contentOffset.x / width;
-      const delta = rawIndex - dragStartIndexRef.current;
-      if (Math.abs(delta) < 0.2) return;
-      const index = Math.max(
-        0,
-        Math.min(pages.length - 1, dragStartIndexRef.current + (delta > 0 ? 1 : -1)),
-      );
-      const date = pages[index];
-      if (date && !isSameDay(date, visualSelected)) {
-        setVisualSelected(date);
-      }
-    },
-    [pages, visualSelected, width],
+    [dayPagerBase, markDayPageMounted, pages, scheduleSelectedCommit, width],
   );
 
   const handleSelectDate = useCallback(
     (date: Date) => {
       if (isSameDay(date, visualSelected)) return;
-      const index = DAY_PAGER_RADIUS + daysBetween(date, dayPagerBase);
+      const targetWeekStart = startOfWeek(date);
+      const index = dayPagerIndexForDate(date, targetWeekStart);
       setVisualSelected(date);
-      if (index >= 0 && index < pages.length) {
-        programmaticDayScrollRef.current = true;
-        dragStartIndexRef.current = index;
-        setDayPagerIndex(index);
-        pagerRef.current?.scrollToIndex({ index, animated: false });
-        scheduleSelectedCommit(date);
+      markDayPageMounted(date);
+      programmaticDayScrollRef.current = true;
+      if (toISODate(targetWeekStart) !== toISODate(dayPagerBase)) {
+        pendingDayPagerIndexRef.current = index;
+        setDayPagerBase(targetWeekStart);
       } else {
-        programmaticDayScrollRef.current = false;
-        setDayPagerBase(date);
-        setDayPagerIndex(DAY_PAGER_RADIUS);
-        dragStartIndexRef.current = DAY_PAGER_RADIUS;
+        pagerRef.current?.scrollToIndex({ index, animated: false });
         requestAnimationFrame(() => {
-          pagerRef.current?.scrollToOffset({
-            offset: width * DAY_PAGER_RADIUS,
-            animated: false,
-          });
+          programmaticDayScrollRef.current = false;
         });
-        scheduleSelectedCommit(date);
       }
+      scheduleSelectedCommit(date);
     },
-    [dayPagerBase, dayPagerIndex, pages.length, scheduleSelectedCommit, visualSelected, width],
+    [dayPagerBase, markDayPageMounted, scheduleSelectedCommit, visualSelected],
   );
+
+  useEffect(() => {
+    const pendingIndex = pendingDayPagerIndexRef.current;
+    if (pendingIndex === null) return;
+    pendingDayPagerIndexRef.current = null;
+    requestAnimationFrame(() => {
+      pagerRef.current?.scrollToIndex({ index: pendingIndex, animated: false });
+      requestAnimationFrame(() => {
+        programmaticDayScrollRef.current = false;
+      });
+    });
+  }, [pages]);
 
   useEffect(
     () => () => {
@@ -1341,26 +1417,25 @@ export default function CalendarScreen() {
             pagingEnabled
             showsHorizontalScrollIndicator={false}
             keyExtractor={(date) => toISODate(date)}
-            initialScrollIndex={DAY_PAGER_RADIUS}
+            initialScrollIndex={initialDayPagerIndex}
             getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
             onScrollBeginDrag={() => {
               programmaticDayScrollRef.current = false;
-              dragStartIndexRef.current = dayPagerIndex;
             }}
-            onScroll={handleDayPagerScroll}
-            scrollEventThrottle={16}
             onMomentumScrollEnd={handlePagerSettle}
             initialNumToRender={3}
-            maxToRenderPerBatch={3}
-            windowSize={3}
+            maxToRenderPerBatch={2}
+            windowSize={7}
+            removeClippedSubviews={false}
+            extraData={mountedDayPageKeys}
             onScrollToIndexFailed={({ index }) => {
               requestAnimationFrame(() => {
                 pagerRef.current?.scrollToOffset({ offset: width * index, animated: false });
               });
             }}
-            renderItem={({ item, index }) =>
-              Math.abs(index - dayPagerIndex) <= 1 ? (
-                <DayAssignmentsPage
+            renderItem={({ item }) =>
+              mountedDayPageKeys.has(toISODate(item)) ? (
+                <MemoDayAssignmentsPage
                   date={item}
                   width={width}
                   height={pagerHeight}
@@ -1374,7 +1449,7 @@ export default function CalendarScreen() {
                   onOpen={openOccurrence}
                 />
               ) : (
-                <View style={{ width, height: pagerHeight }} />
+                <DayPagePlaceholder width={width} height={pagerHeight} />
               )
             }
           />
@@ -1556,6 +1631,69 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
     paddingTop: spacing.xxl,
+  },
+  dayPagePlaceholder: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+  },
+  skeletonWrap: {
+    gap: spacing.lg,
+  },
+  skeletonGroup: {
+    gap: spacing.md,
+  },
+  skeletonSlotHeader: {
+    width: 170,
+    height: 30,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceWarm,
+  },
+  skeletonCard: {
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+  },
+  skeletonImage: {
+    height: 130,
+    backgroundColor: colors.surfaceWarm,
+  },
+  skeletonBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 96,
+  },
+  skeletonAccent: {
+    width: 6,
+    alignSelf: 'stretch',
+    backgroundColor: colors.border,
+  },
+  skeletonTextBlock: {
+    flex: 1,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+  },
+  skeletonLine: {
+    height: 14,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceWarm,
+  },
+  skeletonTitleLine: {
+    width: '58%',
+    height: 24,
+  },
+  skeletonMetaLine: {
+    width: '44%',
+  },
+  skeletonStepsLine: {
+    width: '30%',
+  },
+  skeletonPill: {
+    width: 82,
+    height: 32,
+    borderRadius: radius.pill,
+    marginRight: spacing.lg,
+    backgroundColor: colors.surfaceWarm,
   },
   slotGroup: {
     gap: spacing.md,
