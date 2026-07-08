@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import {
+  ensureCoverPreviewUri,
   ensureCoverThumbnailUri,
+  getCachedCoverPreviewUri,
   getCachedCoverThumbnailUri,
 } from '../cache/coverThumbnailCache';
 
@@ -65,4 +67,64 @@ export function useCoverThumbnailUriMap(
     }
     return byTask;
   }, [refs, thumbnailUriByAsset]);
+}
+
+export function useCoverPreviewUriMap(
+  refs: ReadonlyArray<CoverRef>,
+  sourceUriByTask: ReadonlyMap<string, string | null>,
+): ReadonlyMap<string, string | null> {
+  const [previewUriByAsset, setPreviewUriByAsset] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
+
+  const assetIds = useMemo(() => refs.map((ref) => ref.assetId).join('|'), [refs]);
+
+  useEffect(() => {
+    let active = true;
+
+    void (async () => {
+      for (const { taskId, assetId } of refs) {
+        const cached = await getCachedCoverPreviewUri(assetId);
+        if (!active) return;
+        if (cached) {
+          setPreviewUriByAsset((current) => {
+            if (current.get(assetId) === cached) return current;
+            const next = new Map(current);
+            next.set(assetId, cached);
+            return next;
+          });
+          continue;
+        }
+
+        const sourceUri = sourceUriByTask.get(taskId);
+        if (!sourceUri) continue;
+
+        try {
+          const previewUri = await ensureCoverPreviewUri(assetId, sourceUri);
+          if (!active) return;
+          setPreviewUriByAsset((current) => {
+            if (current.get(assetId) === previewUri) return current;
+            const next = new Map(current);
+            next.set(assetId, previewUri);
+            return next;
+          });
+        } catch {
+          // Best-effort only. Cards keep using the small thumbnail until the
+          // clearer local preview can be generated.
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [assetIds, refs, sourceUriByTask]);
+
+  return useMemo(() => {
+    const byTask = new Map<string, string | null>();
+    for (const { taskId, assetId } of refs) {
+      byTask.set(taskId, previewUriByAsset.get(assetId) ?? null);
+    }
+    return byTask;
+  }, [refs, previewUriByAsset]);
 }

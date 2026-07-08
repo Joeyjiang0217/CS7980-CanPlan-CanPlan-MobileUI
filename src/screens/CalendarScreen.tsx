@@ -37,7 +37,10 @@ import {
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
 import { describeRepeat } from '../features/assignments/repeat';
-import { useCoverThumbnailUriMap } from '../features/media/hooks/useCoverThumbnails';
+import {
+  useCoverPreviewUriMap,
+  useCoverThumbnailUriMap,
+} from '../features/media/hooks/useCoverThumbnails';
 import { useMediaDownloadUrl, useMediaDownloadUrlMap } from '../features/media/hooks/useMedia';
 import { useTasksByOwner, useTaskSteps } from '../features/tasks/hooks/useTaskApi';
 import type { MainStackParamList } from '../navigation/types';
@@ -177,29 +180,28 @@ function useCalendarMountedDays(storeKey: string, initialDateKey: string) {
 // ── A task's cover image, resolved from its asset id ───────────────────────────
 
 function TaskCover({
-  taskId,
-  assetId,
+  uri,
+  cacheKey,
   style,
   iconSize = 32,
   dimmed = false,
 }: {
-  taskId: string;
-  assetId?: string | null;
+  uri?: string | null;
+  cacheKey?: string;
   style: object;
   iconSize?: number;
   dimmed?: boolean;
 }) {
-  // Hook must run unconditionally; it self-disables when there is no asset id.
-  const download = useMediaDownloadUrl(taskId, assetId ?? '');
   return (
     <View style={[style, styles.coverPlaceholder, dimmed ? styles.coverDimmed : null]}>
       <Ionicons name="image-outline" size={iconSize} color={colors.disabled} />
-      {assetId ? (
+      {uri ? (
         <CachedImage
-          uri={download.data?.downloadUrl ?? null}
-          cacheKey={assetId}
+          uri={uri}
+          cacheKey={cacheKey ?? uri}
           style={StyleSheet.absoluteFill}
           contentFit="cover"
+          transition={0}
         />
       ) : null}
     </View>
@@ -302,24 +304,32 @@ function AssignmentCard({
   view,
   bucket,
   coverAssetId,
+  coverUri,
+  coverPreviewUri,
   state,
   isRecurring,
   repeatLabel,
+  todayISO,
   onPress,
 }: {
   view: TaskInstanceView;
   bucket: StatusKey;
   coverAssetId?: string | null;
+  coverUri?: string | null;
+  coverPreviewUri?: string | null;
   state: OccurrenceLifeState;
   isRecurring: boolean;
   /** Recurrence type (e.g. "Daily") shown next to the time; omitted for one-time. */
   repeatLabel?: string;
+  todayISO: string;
   onPress: () => void;
 }) {
   // "Gray" occurrences (projected days after the active one) are inert: dimmed
   // and not tappable. Completed/skipped ones read as done (strikethrough title).
   const isGray = state === 'gray';
   const isDone = bucket === 'done' || bucket === 'skipped';
+  const useHeroImage = !isGray && bucket === 'todo' && view.scheduledDate === todayISO;
+  const heroCoverUri = coverPreviewUri ?? coverUri;
   // Step completion progress is what distinguishes an assignment occurrence from
   // a plain task: total comes from the real task steps, done from the (UI-only)
   // occurrence completion store.
@@ -337,6 +347,7 @@ function AssignmentCard({
   const textBlock = (
     <View style={styles.taskTextWrap}>
       <Text
+        numberOfLines={2}
         style={[
           styles.taskTitle,
           isDone ? styles.taskTitleDone : isGray ? styles.taskTitleFuture : null,
@@ -353,11 +364,11 @@ function AssignmentCard({
             accessibilityLabel="Repeats"
           />
         ) : null}
-        <Text style={[styles.taskMeta, styles.taskMetaInline]}>
+        <Text numberOfLines={1} style={[styles.taskMeta, styles.taskMetaInline]}>
           {repeatLabel ? `${view.scheduledTime} · ${repeatLabel}` : view.scheduledTime}
         </Text>
       </View>
-      <Text style={styles.taskMeta}>
+      <Text numberOfLines={1} style={styles.taskMeta}>
         {doneSteps}/{totalSteps} steps
       </Text>
     </View>
@@ -370,17 +381,21 @@ function AssignmentCard({
     (bucket === 'done' || bucket === 'skipped') &&
     new Date(view.scheduledFor).getTime() < Date.now();
 
-  const statusTag = (
-    <>
-      <View style={[styles.statusTag, { backgroundColor: STATUS_ACCENT[bucket] }]}>
-        <Text style={styles.statusTagText}>{STATUS_LABEL[bucket]}</Text>
+  const statusTags = [
+    <View key={bucket} style={[styles.statusTag, { backgroundColor: STATUS_ACCENT[bucket] }]}>
+      <Text style={styles.statusTagText}>{STATUS_LABEL[bucket]}</Text>
+    </View>,
+    wasOverdue ? (
+      <View key="overdue" style={[styles.statusTag, { backgroundColor: STATUS_ACCENT.overdue }]}>
+        <Text style={styles.statusTagText}>{STATUS_LABEL.overdue}</Text>
       </View>
-      {wasOverdue ? (
-        <View style={[styles.statusTag, { backgroundColor: STATUS_ACCENT.overdue }]}>
-          <Text style={styles.statusTagText}>{STATUS_LABEL.overdue}</Text>
-        </View>
-      ) : null}
-    </>
+    ) : null,
+  ].filter(Boolean);
+  const statusTag = <View style={styles.statusTagRow}>{statusTags}</View>;
+  const compactStatusTag = (
+    <View style={[styles.statusTagRow, wasOverdue ? styles.statusTagColumn : null]}>
+      {statusTags}
+    </View>
   );
 
   return (
@@ -396,18 +411,66 @@ function AssignmentCard({
         pressed ? styles.taskCardPressed : null,
       ]}
     >
-      {isGray ? (
-        // Not-yet-materialized: a compact row with the cover as a left thumbnail.
-        <View style={styles.grayRow}>
-          <TaskCover taskId={view.taskId} assetId={coverAssetId} style={styles.grayThumb} iconSize={20} />
-          {textBlock}
-          {statusTag}
-          <Ionicons name="information-circle-outline" size={24} color={colors.disabled} />
+      {!useHeroImage ? (
+        <View style={styles.compactTaskRow}>
+          <View style={styles.compactTaskMain}>
+            <TaskCover
+              uri={coverUri}
+              cacheKey={coverAssetId ? `${coverAssetId}:calendar-card-thumb-v2` : undefined}
+              style={styles.compactTaskThumb}
+              iconSize={20}
+            />
+            <View style={[styles.taskTextWrap, styles.compactTaskTextWrap]}>
+              <Text
+                numberOfLines={2}
+                style={[
+                  styles.taskTitle,
+                  isDone ? styles.taskTitleDone : isGray ? styles.taskTitleFuture : null,
+                ]}
+              >
+                {view.title}
+              </Text>
+              <View style={styles.taskMetaRow}>
+                {isRecurring ? (
+                  <Ionicons
+                    name="repeat"
+                    size={14}
+                    color={isGray ? colors.disabled : colors.textMuted}
+                    accessibilityLabel="Repeats"
+                  />
+                ) : null}
+                <Text numberOfLines={1} style={[styles.taskMeta, styles.taskMetaInline]}>
+                  {repeatLabel ? `${view.scheduledTime} · ${repeatLabel}` : view.scheduledTime}
+                </Text>
+              </View>
+              <Text numberOfLines={1} style={styles.taskMeta}>
+                {doneSteps}/{totalSteps} steps
+              </Text>
+            </View>
+          </View>
+          <View style={styles.compactTaskActions}>
+            {compactStatusTag}
+            <Ionicons
+              name={isGray ? 'information-circle-outline' : 'chevron-forward'}
+              size={24}
+              color={isGray ? colors.disabled : colors.primary}
+            />
+          </View>
         </View>
       ) : (
-        // Materialized: the full-width cover photo on top of the detail row.
+        // Today's live To Do keeps the larger image treatment.
         <>
-          <TaskCover taskId={view.taskId} assetId={coverAssetId} style={styles.taskImage} />
+          <TaskCover
+            uri={heroCoverUri}
+            cacheKey={
+              coverAssetId
+                ? coverPreviewUri
+                  ? `${coverAssetId}:calendar-card-preview-v1`
+                  : `${coverAssetId}:calendar-card-thumb-v2`
+                : undefined
+            }
+            style={styles.taskImage}
+          />
           <View style={styles.taskBody}>
             <View style={[styles.taskAccent, { backgroundColor: STATUS_ACCENT[bucket] }]} />
             {textBlock}
@@ -948,6 +1011,8 @@ function DayAssignmentsPage({
   ownerId,
   activeStatus,
   coverByTask,
+  coverThumbnailUriByTask,
+  coverPreviewUriByTask,
   assignmentById,
   activeDates,
   today,
@@ -960,6 +1025,8 @@ function DayAssignmentsPage({
   ownerId: string;
   activeStatus: StatusKey;
   coverByTask: Map<string, string | null | undefined>;
+  coverThumbnailUriByTask: ReadonlyMap<string, string | null>;
+  coverPreviewUriByTask: ReadonlyMap<string, string | null>;
   assignmentById: ReadonlyMap<string, TaskAssignment>;
   activeDates: ReadonlyMap<string, string>;
   today: Date;
@@ -1072,9 +1139,12 @@ function DayAssignmentsPage({
           view={view}
           bucket={activeStatus}
           coverAssetId={coverByTask.get(view.taskId)}
+          coverUri={coverThumbnailUriByTask.get(view.taskId) ?? null}
+          coverPreviewUri={coverPreviewUriByTask.get(view.taskId) ?? null}
           state={state}
           isRecurring={isRecurring}
           repeatLabel={isRecurring ? describeRepeat(assignment) : undefined}
+          todayISO={todayISO}
           onPress={handlePress}
         />
       );
@@ -1084,6 +1154,8 @@ function DayAssignmentsPage({
       activeStatus,
       assignmentById,
       coverByTask,
+      coverThumbnailUriByTask,
+      coverPreviewUriByTask,
       onOpen,
       statusOverrides,
       todayISO,
@@ -1179,6 +1251,7 @@ export default function CalendarScreen() {
   // plain strings — month-grid cells render with zero hooks of their own.
   const coverUriByTask = useMediaDownloadUrlMap(prewarmCovers);
   const coverThumbnailUriByTask = useCoverThumbnailUriMap(prewarmCovers, coverUriByTask);
+  const coverPreviewUriByTask = useCoverPreviewUriMap(prewarmCovers, coverUriByTask);
 
   // UI-only status overrides (mark done / skip from the runner) win over the
   // server status so the occurrence moves buckets within the session.
@@ -1376,7 +1449,8 @@ export default function CalendarScreen() {
         <View style={styles.weekStrip}>
           {weekDays.map((day) => {
             const isSelected = isSameDay(day, visualSelected);
-            const highlightColor = isSameDay(day, today) ? colors.danger : colors.text;
+            const isToday = isSameDay(day, today);
+            const highlightColor = isToday ? colors.danger : colors.text;
             return (
               <Pressable
                 key={day.toISOString()}
@@ -1386,7 +1460,14 @@ export default function CalendarScreen() {
                 onPress={() => handleSelectDate(day)}
                 style={styles.weekCell}
               >
-                <Text style={styles.weekCellWeekday}>{WEEKDAYS[day.getDay()]}</Text>
+                <Text
+                  style={[
+                    styles.weekCellWeekday,
+                    isToday && !isSelected ? styles.weekCellToday : null,
+                  ]}
+                >
+                  {WEEKDAYS[day.getDay()]}
+                </Text>
                 <View
                   style={[
                     styles.weekCellCircle,
@@ -1394,7 +1475,11 @@ export default function CalendarScreen() {
                   ]}
                 >
                   <Text
-                    style={[styles.weekCellDay, isSelected ? styles.weekCellDaySelected : null]}
+                    style={[
+                      styles.weekCellDay,
+                      isToday && !isSelected ? styles.weekCellToday : null,
+                      isSelected ? styles.weekCellDaySelected : null,
+                    ]}
                   >
                     {day.getDate()}
                   </Text>
@@ -1442,6 +1527,8 @@ export default function CalendarScreen() {
                   ownerId={ownerId}
                   activeStatus={activeStatus}
                   coverByTask={coverByTask}
+                  coverThumbnailUriByTask={coverThumbnailUriByTask}
+                  coverPreviewUriByTask={coverPreviewUriByTask}
                   assignmentById={assignmentById}
                   activeDates={activeDates}
                   today={today}
@@ -1597,6 +1684,9 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
   },
+  weekCellToday: {
+    color: colors.danger,
+  },
   weekCellCircle: {
     width: 40,
     height: 40,
@@ -1715,7 +1805,7 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   taskImage: {
-    height: 130,
+    height: 112,
   },
   coverPlaceholder: {
     backgroundColor: colors.surfaceWarm,
@@ -1743,15 +1833,30 @@ const styles = StyleSheet.create({
   taskBody: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing.sm,
   },
-  // Compact "not materialized" layout: cover as a left thumbnail.
-  grayRow: {
+  compactTaskRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingLeft: spacing.lg,
+    paddingRight: spacing.md,
     gap: spacing.sm,
   },
-  grayThumb: {
+  compactTaskMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  compactTaskActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexShrink: 1,
+    gap: spacing.sm,
+    minWidth: 0,
+  },
+  compactTaskThumb: {
     width: 56,
     height: 56,
     borderRadius: radius.md,
@@ -1764,6 +1869,10 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: spacing.lg,
     paddingHorizontal: spacing.lg,
+  },
+  compactTaskTextWrap: {
+    minWidth: 0,
+    paddingHorizontal: spacing.sm,
   },
   taskTitle: {
     ...typography.heading,
@@ -1794,7 +1903,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     borderRadius: radius.pill,
-    marginRight: spacing.sm,
+  },
+  statusTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  statusTagColumn: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: spacing.xs,
   },
   statusTagText: {
     ...typography.caption,

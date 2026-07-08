@@ -10,8 +10,10 @@ import {
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 const THUMB_CACHE_VERSION = 'v2';
+const PREVIEW_CACHE_VERSION = 'v2';
 const THUMB_DIR = `${documentDirectory ?? cacheDirectory ?? ''}cover-thumbnails/`;
 const THUMB_SIZE = 64;
+const PREVIEW_WIDTH = 768;
 
 function safeIdFor(assetId: string): string {
   return assetId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -19,6 +21,10 @@ function safeIdFor(assetId: string): string {
 
 function thumbnailPathFor(assetId: string): string {
   return `${THUMB_DIR}${safeIdFor(assetId)}-${THUMB_SIZE}-${THUMB_CACHE_VERSION}.jpg`;
+}
+
+function previewPathFor(assetId: string): string {
+  return `${THUMB_DIR}${safeIdFor(assetId)}-preview-${PREVIEW_WIDTH}-${PREVIEW_CACHE_VERSION}.jpg`;
 }
 
 function sourcePathFor(assetId: string): string {
@@ -46,6 +52,12 @@ const inFlight = new Map<string, Promise<string>>();
 export async function getCachedCoverThumbnailUri(assetId: string): Promise<string | null> {
   if (!THUMB_DIR) return null;
   const info = await getInfoAsync(thumbnailPathFor(assetId));
+  return info.exists ? info.uri : null;
+}
+
+export async function getCachedCoverPreviewUri(assetId: string): Promise<string | null> {
+  if (!THUMB_DIR) return null;
+  const info = await getInfoAsync(previewPathFor(assetId));
   return info.exists ? info.uri : null;
 }
 
@@ -97,6 +109,43 @@ export async function ensureCoverThumbnailUri(
   });
 
   inFlight.set(assetId, task);
+  return task;
+}
+
+export async function ensureCoverPreviewUri(
+  assetId: string,
+  sourceUri: string,
+): Promise<string> {
+  if (!THUMB_DIR) return sourceUri;
+
+  const cached = await getCachedCoverPreviewUri(assetId);
+  if (cached) return cached;
+
+  const inFlightKey = `${assetId}:preview`;
+  const existing = inFlight.get(inFlightKey);
+  if (existing) return existing;
+
+  const task = (async () => {
+    await ensureDir();
+    const outputPath = previewPathFor(assetId);
+    const localSourceUri = sourceUri.startsWith('http')
+      ? (await downloadAsync(sourceUri, sourcePathFor(`${assetId}-preview`))).uri
+      : sourceUri;
+    const result = await manipulateAsync(
+      localSourceUri,
+      [{ resize: { width: PREVIEW_WIDTH } }],
+      { compress: 0.78, format: SaveFormat.JPEG },
+    );
+    await copyAsync({ from: result.uri, to: outputPath });
+    if (localSourceUri !== sourceUri) {
+      void deleteAsync(localSourceUri, { idempotent: true });
+    }
+    return outputPath;
+  })().finally(() => {
+    inFlight.delete(inFlightKey);
+  });
+
+  inFlight.set(inFlightKey, task);
   return task;
 }
 
