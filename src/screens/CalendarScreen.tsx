@@ -5,11 +5,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
   InteractionManager,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -117,8 +118,15 @@ const addMonths = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth()
 const startOfWeek = (d: Date) => addDays(d, -d.getDay());
 const isSameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const daysBetween = (a: Date, b: Date) =>
+  Math.round(
+    (Date.UTC(a.getFullYear(), a.getMonth(), a.getDate()) -
+      Date.UTC(b.getFullYear(), b.getMonth(), b.getDate())) /
+      86_400_000,
+  );
 
 const MONTH_PAGER_RADIUS = 60;
+const DAY_PAGER_RADIUS = 120;
 
 // ── A task's cover image, resolved from its asset id ───────────────────────────
 
@@ -554,7 +562,10 @@ function MonthPickerModal({
   onSelectDay: (date: Date) => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height: windowHeight } = useWindowDimensions();
+  const slideY = useRef(new Animated.Value(windowHeight)).current;
+  const [modalMounted, setModalMounted] = useState(visible);
+  const [contentReady, setContentReady] = useState(false);
   const [baseMonth, setBaseMonth] = useState(() => startOfMonth(initialDate));
   const [currentIndex, setCurrentIndex] = useState(MONTH_PAGER_RADIUS);
   const [pagerHeight, setPagerHeight] = useState(0);
@@ -562,6 +573,45 @@ function MonthPickerModal({
   const pagingFromButtonRef = useRef(false);
   const pendingButtonIndexRef = useRef<number | null>(null);
   const pagingResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contentReadyHandleRef = useRef<ReturnType<
+    typeof InteractionManager.runAfterInteractions
+  > | null>(null);
+
+  useEffect(() => {
+    if (visible) {
+      contentReadyHandleRef.current?.cancel();
+      setModalMounted(true);
+      setContentReady(false);
+      slideY.setValue(windowHeight);
+      Animated.timing(slideY, {
+        toValue: 0,
+        duration: 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (!finished) return;
+        contentReadyHandleRef.current = InteractionManager.runAfterInteractions(() => {
+          setContentReady(true);
+          contentReadyHandleRef.current = null;
+        });
+      });
+      return;
+    }
+
+    contentReadyHandleRef.current?.cancel();
+    contentReadyHandleRef.current = null;
+    Animated.timing(slideY, {
+      toValue: windowHeight,
+      duration: 220,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setContentReady(false);
+        setModalMounted(false);
+      }
+    });
+  }, [visible, slideY, windowHeight]);
 
   // Re-sync to the current selection whenever the sheet is reopened.
   useEffect(() => {
@@ -716,13 +766,26 @@ function MonthPickerModal({
       if (pagingResetTimerRef.current) {
         clearTimeout(pagingResetTimerRef.current);
       }
+      contentReadyHandleRef.current?.cancel();
     },
     [],
   );
 
+  if (!modalMounted) {
+    return null;
+  }
+
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={[styles.modalRoot, { paddingTop: insets.top }]}>
+    <Modal visible={modalMounted} transparent animationType="none" onRequestClose={onClose}>
+      <Animated.View
+        style={[
+          styles.modalRoot,
+          {
+            paddingTop: insets.top,
+            transform: [{ translateY: slideY }],
+          },
+        ]}
+      >
         <View style={styles.modalHeader}>
           <Pressable
             accessibilityRole="button"
@@ -770,7 +833,7 @@ function MonthPickerModal({
           style={styles.monthBody}
           onLayout={(event) => setPagerHeight(event.nativeEvent.layout.height)}
         >
-          {pagerHeight > 0 && gridReady ? (
+          {pagerHeight > 0 && gridReady && contentReady ? (
             <FlatList
               ref={pagerRef}
               data={pages}
@@ -793,7 +856,7 @@ function MonthPickerModal({
             />
           ) : null}
         </View>
-      </View>
+      </Animated.View>
     </Modal>
   );
 }
@@ -861,66 +924,110 @@ function DayAssignmentsPage({
   const isLoading = viewsQuery.isLoading || !ownerId;
   const todayISO = toISODate(today);
 
+  type DayRow =
+    | { kind: 'loading'; key: string }
+    | { kind: 'message'; key: string; message: string }
+    | { kind: 'header'; key: string; hour: number }
+    | { kind: 'task'; key: string; view: TaskInstanceView };
+
+  const rows = useMemo<DayRow[]>(() => {
+    if (isLoading) return [{ kind: 'loading', key: 'loading' }];
+    if (viewsQuery.isError) {
+      return [{ kind: 'message', key: 'error', message: 'Could not load this day’s tasks.' }];
+    }
+    if (views.length === 0) {
+      return [{ kind: 'message', key: 'empty', message: 'Nothing here for this day.' }];
+    }
+
+    const nextRows: DayRow[] = [];
+    for (const [hour, groupViews] of groups) {
+      nextRows.push({ kind: 'header', key: `header-${hour}`, hour });
+      for (const view of groupViews) {
+        nextRows.push({
+          kind: 'task',
+          key: `${view.assignmentId}-${view.scheduledFor}`,
+          view,
+        });
+      }
+    }
+    return nextRows;
+  }, [groups, isLoading, views.length, viewsQuery.isError]);
+
+  const renderRow = useCallback(
+    ({ item }: { item: DayRow }) => {
+      if (item.kind === 'loading') {
+        return (
+          <View style={styles.stateBox}>
+            <ActivityIndicator color={colors.primary} />
+          </View>
+        );
+      }
+      if (item.kind === 'message') {
+        return <Text style={styles.stateText}>{item.message}</Text>;
+      }
+      if (item.kind === 'header') {
+        return <Text style={styles.slotHeader}>{slotLabel(item.hour)}</Text>;
+      }
+
+      const view = item.view;
+      const override = statusOverrides.get(
+        occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
+      );
+      const assignment = assignmentById.get(view.assignmentId);
+      const isRecurring = assignment?.scheduleType === 'RECURRING';
+      const activeDate = activeDates.get(view.assignmentId);
+      const state = occurrenceState({
+        scheduledDate: view.scheduledDate,
+        status: override ?? view.status,
+        activeDate,
+        todayISO,
+      });
+      const handlePress =
+        state === 'gray'
+          ? () =>
+              Alert.alert(
+                'Not active yet',
+                activeDate
+                  ? `This day hasn’t started in the series yet — it’s not materialized. Open the current task on ${formatShortDate(activeDate)} to delete this or all future occurrences.`
+                  : 'This day hasn’t started in the series yet — it’s not materialized. Open the current task to delete this or all future occurrences.',
+              )
+          : () => onOpen(view);
+
+      return (
+        <AssignmentCard
+          view={view}
+          bucket={activeStatus}
+          coverAssetId={coverByTask.get(view.taskId)}
+          state={state}
+          isRecurring={isRecurring}
+          repeatLabel={isRecurring ? describeRepeat(assignment) : undefined}
+          onPress={handlePress}
+        />
+      );
+    },
+    [
+      activeDates,
+      activeStatus,
+      assignmentById,
+      coverByTask,
+      onOpen,
+      statusOverrides,
+      todayISO,
+    ],
+  );
+
   return (
-    <ScrollView
+    <FlatList
       style={{ width, height: height || undefined }}
       contentContainerStyle={[styles.listContent, { paddingBottom: bottomPadding }]}
+      data={rows}
+      keyExtractor={(item) => item.key}
+      renderItem={renderRow}
+      initialNumToRender={6}
+      maxToRenderPerBatch={4}
+      windowSize={5}
       showsVerticalScrollIndicator={false}
-    >
-      {isLoading ? (
-        <View style={styles.stateBox}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
-      ) : viewsQuery.isError ? (
-        <Text style={styles.stateText}>Could not load this day’s tasks.</Text>
-      ) : views.length === 0 ? (
-        <Text style={styles.stateText}>Nothing here for this day.</Text>
-      ) : (
-        groups.map(([hour, groupViews]) => (
-          <View key={hour} style={styles.slotGroup}>
-            <Text style={styles.slotHeader}>{slotLabel(hour)}</Text>
-            {groupViews.map((view) => {
-              const override = statusOverrides.get(
-                occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
-              );
-              const assignment = assignmentById.get(view.assignmentId);
-              const isRecurring = assignment?.scheduleType === 'RECURRING';
-              const activeDate = activeDates.get(view.assignmentId);
-              const state = occurrenceState({
-                scheduledDate: view.scheduledDate,
-                status: override ?? view.status,
-                activeDate,
-                todayISO,
-              });
-              // Gray days aren't operable, but tapping explains why and points to
-              // the current (most recently materialized) occurrence to act on.
-              const handlePress =
-                state === 'gray'
-                  ? () =>
-                      Alert.alert(
-                        'Not active yet',
-                        activeDate
-                          ? `This day hasn’t started in the series yet — it’s not materialized. Open the current task on ${formatShortDate(activeDate)} to delete this or all future occurrences.`
-                          : 'This day hasn’t started in the series yet — it’s not materialized. Open the current task to delete this or all future occurrences.',
-                      )
-                  : () => onOpen(view);
-              return (
-                <AssignmentCard
-                  key={`${view.assignmentId}-${view.scheduledFor}`}
-                  view={view}
-                  bucket={activeStatus}
-                  coverAssetId={coverByTask.get(view.taskId)}
-                  state={state}
-                  isRecurring={isRecurring}
-                  repeatLabel={isRecurring ? describeRepeat(assignment) : undefined}
-                  onPress={handlePress}
-                />
-              );
-            })}
-          </View>
-        ))
-      )}
-    </ScrollView>
+    />
   );
 }
 
@@ -931,6 +1038,7 @@ export default function CalendarScreen() {
 
   const [ownerId, setOwnerId] = useState('');
   const [selected, setSelected] = useState(() => new Date());
+  const [visualSelected, setVisualSelected] = useState(() => new Date());
   const [activeStatus, setActiveStatus] = useState<StatusKey>('todo');
   const [monthPickerVisible, setMonthPickerVisible] = useState(false);
   const [addChoiceVisible, setAddChoiceVisible] = useState(false);
@@ -1031,28 +1139,101 @@ export default function CalendarScreen() {
     return result;
   }, [dayViewsQuery.data, statusOverrides]);
 
-  // Horizontal pager: three pages [prev, selected, next]. Swiping snaps like the
-  // iOS home screen; on settle we update `selected` and silently recenter.
+  // Horizontal pager: use a stable date strip so swiping never has to rebuild
+  // data and jump back to the center page. Only the current page (and neighbours
+  // while dragging) render real task content below.
   const pagerRef = useRef<FlatList<Date>>(null);
-  const pages = useMemo(() => [-1, 0, 1].map((offset) => addDays(selected, offset)), [selected]);
+  const dayCommitFrameRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
+  const dragStartIndexRef = useRef(DAY_PAGER_RADIUS);
+  const programmaticDayScrollRef = useRef(false);
+  const [dayPagerBase, setDayPagerBase] = useState(() => new Date());
+  const [dayPagerIndex, setDayPagerIndex] = useState(DAY_PAGER_RADIUS);
+  const pages = useMemo(
+    () =>
+      Array.from({ length: DAY_PAGER_RADIUS * 2 + 1 }, (_, index) =>
+        addDays(dayPagerBase, index - DAY_PAGER_RADIUS),
+      ),
+    [dayPagerBase],
+  );
 
-  // Whenever the selected day changes (swipe settle OR week-strip tap), snap back
-  // to the centre page so there's always a prev/next to swipe to.
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      pagerRef.current?.scrollToOffset({ offset: width, animated: false });
+  const scheduleSelectedCommit = useCallback((target: Date) => {
+    if (dayCommitFrameRef.current) {
+      cancelAnimationFrame(dayCommitFrameRef.current);
+    }
+    dayCommitFrameRef.current = requestAnimationFrame(() => {
+      dayCommitFrameRef.current = null;
+      setSelected(target);
     });
-    return () => cancelAnimationFrame(id);
-  }, [selected, width]);
+  }, []);
 
   const handlePagerSettle = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const page = Math.round(event.nativeEvent.contentOffset.x / width);
-      if (page !== 1) {
-        setSelected((current) => addDays(current, page - 1));
+      const index = Math.max(0, Math.min(pages.length - 1, Math.round(event.nativeEvent.contentOffset.x / width)));
+      const date = pages[index];
+      if (date) {
+        programmaticDayScrollRef.current = false;
+        setDayPagerIndex(index);
+        dragStartIndexRef.current = index;
+        setVisualSelected(date);
+        scheduleSelectedCommit(date);
       }
     },
-    [width],
+    [pages, scheduleSelectedCommit, width],
+  );
+
+  const handleDayPagerScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (programmaticDayScrollRef.current) return;
+      const rawIndex = event.nativeEvent.contentOffset.x / width;
+      const delta = rawIndex - dragStartIndexRef.current;
+      if (Math.abs(delta) < 0.2) return;
+      const index = Math.max(
+        0,
+        Math.min(pages.length - 1, dragStartIndexRef.current + (delta > 0 ? 1 : -1)),
+      );
+      const date = pages[index];
+      if (date && !isSameDay(date, visualSelected)) {
+        setVisualSelected(date);
+      }
+    },
+    [pages, visualSelected, width],
+  );
+
+  const handleSelectDate = useCallback(
+    (date: Date) => {
+      if (isSameDay(date, visualSelected)) return;
+      const index = DAY_PAGER_RADIUS + daysBetween(date, dayPagerBase);
+      setVisualSelected(date);
+      if (index >= 0 && index < pages.length) {
+        programmaticDayScrollRef.current = true;
+        dragStartIndexRef.current = index;
+        setDayPagerIndex(index);
+        pagerRef.current?.scrollToIndex({ index, animated: false });
+        scheduleSelectedCommit(date);
+      } else {
+        programmaticDayScrollRef.current = false;
+        setDayPagerBase(date);
+        setDayPagerIndex(DAY_PAGER_RADIUS);
+        dragStartIndexRef.current = DAY_PAGER_RADIUS;
+        requestAnimationFrame(() => {
+          pagerRef.current?.scrollToOffset({
+            offset: width * DAY_PAGER_RADIUS,
+            animated: false,
+          });
+        });
+        scheduleSelectedCommit(date);
+      }
+    },
+    [dayPagerBase, dayPagerIndex, pages.length, scheduleSelectedCommit, visualSelected, width],
+  );
+
+  useEffect(
+    () => () => {
+      if (dayCommitFrameRef.current) {
+        cancelAnimationFrame(dayCommitFrameRef.current);
+      }
+    },
+    [],
   );
 
   const openOccurrence = useCallback(
@@ -1083,7 +1264,7 @@ export default function CalendarScreen() {
     [navigation, today],
   );
 
-  const weekStart = useMemo(() => startOfWeek(selected), [selected]);
+  const weekStart = useMemo(() => startOfWeek(visualSelected), [visualSelected]);
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
     [weekStart],
@@ -1118,7 +1299,7 @@ export default function CalendarScreen() {
 
         <View style={styles.weekStrip}>
           {weekDays.map((day) => {
-            const isSelected = isSameDay(day, selected);
+            const isSelected = isSameDay(day, visualSelected);
             const highlightColor = isSameDay(day, today) ? colors.danger : colors.text;
             return (
               <Pressable
@@ -1126,7 +1307,7 @@ export default function CalendarScreen() {
                 accessibilityRole="button"
                 accessibilityLabel={day.toDateString()}
                 accessibilityState={{ selected: isSelected }}
-                onPress={() => setSelected(day)}
+                onPress={() => handleSelectDate(day)}
                 style={styles.weekCell}
               >
                 <Text style={styles.weekCellWeekday}>{WEEKDAYS[day.getDay()]}</Text>
@@ -1160,24 +1341,42 @@ export default function CalendarScreen() {
             pagingEnabled
             showsHorizontalScrollIndicator={false}
             keyExtractor={(date) => toISODate(date)}
-            initialScrollIndex={1}
+            initialScrollIndex={DAY_PAGER_RADIUS}
             getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+            onScrollBeginDrag={() => {
+              programmaticDayScrollRef.current = false;
+              dragStartIndexRef.current = dayPagerIndex;
+            }}
+            onScroll={handleDayPagerScroll}
+            scrollEventThrottle={16}
             onMomentumScrollEnd={handlePagerSettle}
-            renderItem={({ item }) => (
-              <DayAssignmentsPage
-                date={item}
-                width={width}
-                height={pagerHeight}
-                ownerId={ownerId}
-                activeStatus={activeStatus}
-                coverByTask={coverByTask}
-                assignmentById={assignmentById}
-                activeDates={activeDates}
-                today={today}
-                bottomPadding={insets.bottom + spacing.xxl}
-                onOpen={openOccurrence}
-              />
-            )}
+            initialNumToRender={3}
+            maxToRenderPerBatch={3}
+            windowSize={3}
+            onScrollToIndexFailed={({ index }) => {
+              requestAnimationFrame(() => {
+                pagerRef.current?.scrollToOffset({ offset: width * index, animated: false });
+              });
+            }}
+            renderItem={({ item, index }) =>
+              Math.abs(index - dayPagerIndex) <= 1 ? (
+                <DayAssignmentsPage
+                  date={item}
+                  width={width}
+                  height={pagerHeight}
+                  ownerId={ownerId}
+                  activeStatus={activeStatus}
+                  coverByTask={coverByTask}
+                  assignmentById={assignmentById}
+                  activeDates={activeDates}
+                  today={today}
+                  bottomPadding={insets.bottom + spacing.xxl}
+                  onOpen={openOccurrence}
+                />
+              ) : (
+                <View style={{ width, height: pagerHeight }} />
+              )
+            }
           />
         ) : null}
       </View>
@@ -1210,14 +1409,14 @@ export default function CalendarScreen() {
       <MonthPickerModal
         visible={monthPickerVisible}
         ownerId={ownerId}
-        initialDate={selected}
+        initialDate={visualSelected}
         coverByTask={coverByTask}
         coverUriByTask={coverThumbnailUriByTask}
         activeDates={activeDates}
         today={today}
         onClose={() => setMonthPickerVisible(false)}
         onSelectDay={(date) => {
-          setSelected(date);
+          handleSelectDate(date);
           setMonthPickerVisible(false);
         }}
       />
