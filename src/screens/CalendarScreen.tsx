@@ -37,6 +37,7 @@ import {
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
 import { describeRepeat } from '../features/assignments/repeat';
+import { useCoverThumbnailUriMap } from '../features/media/hooks/useCoverThumbnails';
 import { useMediaDownloadUrl, useMediaDownloadUrlMap } from '../features/media/hooks/useMedia';
 import { useTasksByOwner, useTaskSteps } from '../features/tasks/hooks/useTaskApi';
 import type { MainStackParamList } from '../navigation/types';
@@ -205,9 +206,8 @@ function DayThumbGrid({
 }: {
   items: DayThumbItem[];
   coverByTask: Map<string, string | null | undefined>;
-  // taskId → resolved download URL, hoisted to one useMediaDownloadUrlMap call
-  // at the screen level. Cells stay hook-free: ~30 days × up to 9 covers × 3
-  // pages of per-cell query hooks is what froze the pager on mount/swipe.
+  // taskId → local thumbnail URI. Cells stay hook-free: ~30 days × up to 9
+  // covers × pages of per-cell query hooks is what froze the pager on mount.
   coverUriByTask: ReadonlyMap<string, string | null>;
 }) {
   // Each cover gets its own equal square tile (WeChat-group-avatar style) so
@@ -219,14 +219,14 @@ function DayThumbGrid({
     <View style={styles.monthThumb}>
       {items.map(({ taskId, gray }, index) => {
         const assetId = coverByTask.get(taskId);
+        const thumbUri = coverUriByTask.get(taskId) ?? null;
         return (
           <View key={`${taskId}-${index}`} style={{ width: tile, height: tile }}>
-            <View style={[StyleSheet.absoluteFill, styles.coverPlaceholder]}>
-              <Ionicons name="image-outline" size={10} color={colors.disabled} />
-              {assetId ? (
+            <View style={StyleSheet.absoluteFill}>
+              {assetId && thumbUri ? (
                 <CachedImage
-                  uri={coverUriByTask.get(taskId) ?? null}
-                  cacheKey={assetId}
+                  uri={thumbUri}
+                  cacheKey={`${assetId}:month-thumb-64-v2`}
                   style={StyleSheet.absoluteFill}
                   contentFit="cover"
                   transition={0}
@@ -495,6 +495,7 @@ const MonthGridPage = memo(function MonthGridPage({
           const iso = toISODate(date);
           const dayItems = tasksByDate.get(iso) ?? [];
           const shouldRenderThumb = dayItems.length > 0 && day <= thumbRenderLimit;
+          const isToday = isSameDay(date, today);
           return (
             <Pressable
               key={day}
@@ -510,14 +511,17 @@ const MonthGridPage = memo(function MonthGridPage({
                   coverUriByTask={coverUriByTask}
                 />
               ) : null}
-              <Text
-                style={[
-                  styles.monthDayText,
-                  shouldRenderThumb ? styles.monthDayTextOnImage : null,
-                ]}
-              >
-                {day}
-              </Text>
+              {isToday ? <View style={styles.monthTodayHalo} pointerEvents="none" /> : null}
+              <View style={styles.monthDayBadge}>
+                <Text
+                  style={[
+                    styles.monthDayText,
+                    shouldRenderThumb ? styles.monthDayTextOnImage : null,
+                  ]}
+                >
+                  {day}
+                </Text>
+              </View>
             </Pressable>
           );
         })}
@@ -1003,6 +1007,7 @@ export default function CalendarScreen() {
   // One URL query per distinct task cover, resolved here and passed down as
   // plain strings — month-grid cells render with zero hooks of their own.
   const coverUriByTask = useMediaDownloadUrlMap(prewarmCovers);
+  const coverThumbnailUriByTask = useCoverThumbnailUriMap(prewarmCovers, coverUriByTask);
 
   // UI-only status overrides (mark done / skip from the runner) win over the
   // server status so the occurrence moves buckets within the session.
@@ -1207,7 +1212,7 @@ export default function CalendarScreen() {
         ownerId={ownerId}
         initialDate={selected}
         coverByTask={coverByTask}
-        coverUriByTask={coverUriByTask}
+        coverUriByTask={coverThumbnailUriByTask}
         activeDates={activeDates}
         today={today}
         onClose={() => setMonthPickerVisible(false)}
@@ -1576,6 +1581,31 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'center',
     alignContent: 'center',
+  },
+  monthDayBadge: {
+    minWidth: 30,
+    height: 30,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  monthTodayHalo: {
+    position: 'absolute',
+    top: 0,
+    left: '50%',
+    marginLeft: -28,
+    width: 56,
+    height: 56,
+    borderRadius: radius.pill,
+    borderWidth: 3,
+    borderColor: colors.danger,
+    backgroundColor: 'transparent',
+    shadowColor: colors.danger,
+    shadowOpacity: 0.45,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 3,
   },
   monthDayText: {
     ...typography.bodyStrong,

@@ -26,7 +26,15 @@
       ],
       "expo-audio",
       "expo-video",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "buildReactNativeFromSource": true
+          }
+        }
+      ]
     ]
   }
 }
