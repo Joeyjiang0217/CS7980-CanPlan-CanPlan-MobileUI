@@ -619,7 +619,7 @@ const MonthGridPage = memo(function MonthGridPage({
               accessibilityRole="button"
               accessibilityLabel={date.toDateString()}
               onPress={() => onSelectDay(date)}
-              style={styles.monthCell}
+              style={[styles.monthCell, isToday ? styles.monthCellToday : null]}
             >
               {shouldRenderThumb ? (
                 <DayThumbGrid
@@ -679,6 +679,7 @@ function MonthPickerModal({
   const [currentIndex, setCurrentIndex] = useState(MONTH_PAGER_RADIUS);
   const [pagerHeight, setPagerHeight] = useState(0);
   const pagerRef = useRef<FlatList<Date>>(null);
+  const visualMonthIndexRef = useRef(MONTH_PAGER_RADIUS);
   const pagingFromButtonRef = useRef(false);
   const pendingButtonIndexRef = useRef<number | null>(null);
   const pagingResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -726,6 +727,7 @@ function MonthPickerModal({
   useEffect(() => {
     if (visible) {
       setBaseMonth(startOfMonth(initialDate));
+      visualMonthIndexRef.current = MONTH_PAGER_RADIUS;
       setCurrentIndex(MONTH_PAGER_RADIUS);
     }
   }, [visible, initialDate]);
@@ -804,21 +806,39 @@ function MonthPickerModal({
     }
   }, []);
 
+  const updateVisualMonthIndex = useCallback(
+    (index: number) => {
+      const nextIndex = Math.max(0, Math.min(pages.length - 1, index));
+      if (visualMonthIndexRef.current === nextIndex) return;
+      visualMonthIndexRef.current = nextIndex;
+      setCurrentIndex(nextIndex);
+    },
+    [pages.length],
+  );
+
+  const handleMonthScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const page = Math.round(event.nativeEvent.contentOffset.x / width);
+      updateVisualMonthIndex(page);
+    },
+    [updateVisualMonthIndex, width],
+  );
+
   const handleSettle = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const page = Math.round(event.nativeEvent.contentOffset.x / width);
       const maxIndex = pages.length - 1;
-      setCurrentIndex(Math.max(0, Math.min(maxIndex, page)));
+      updateVisualMonthIndex(Math.max(0, Math.min(maxIndex, page)));
       finishButtonPaging();
     },
-    [finishButtonPaging, pages.length, width],
+    [finishButtonPaging, pages.length, updateVisualMonthIndex, width],
   );
 
   const handleMonthStep = useCallback(
     (step: -1 | 1) => {
       if (pagingFromButtonRef.current) return;
       if (!pagerRef.current || pagerHeight <= 0 || !gridReady) {
-        setCurrentIndex((index) => Math.max(0, Math.min(pages.length - 1, index + step)));
+        updateVisualMonthIndex(currentIndex + step);
         return;
       }
       const nextIndex = Math.max(0, Math.min(pages.length - 1, currentIndex + step));
@@ -952,6 +972,8 @@ function MonthPickerModal({
               keyExtractor={keyMonthPage}
               initialScrollIndex={MONTH_PAGER_RADIUS}
               getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+              onScroll={handleMonthScroll}
+              scrollEventThrottle={16}
               onMomentumScrollEnd={handleSettle}
               initialNumToRender={5}
               maxToRenderPerBatch={2}
@@ -1284,6 +1306,8 @@ export default function CalendarScreen() {
     () => dayPagerIndexForDate(new Date(), initialWeekStart),
     [initialWeekStart],
   );
+  const visualDateKeyRef = useRef(selectedISO);
+  const visualDayPagerIndexRef = useRef(initialDayPagerIndex);
   const pendingDayPagerIndexRef = useRef<number | null>(null);
   const programmaticDayScrollRef = useRef(false);
   const [dayPagerBase, setDayPagerBase] = useState(() => initialWeekStart);
@@ -1303,6 +1327,17 @@ export default function CalendarScreen() {
     [mountedDaysKey],
   );
 
+  const updateVisualSelectedDate = useCallback(
+    (date: Date) => {
+      const dateKey = toISODate(date);
+      if (visualDateKeyRef.current === dateKey) return;
+      visualDateKeyRef.current = dateKey;
+      setVisualSelected(date);
+      markDayPageMounted(date);
+    },
+    [markDayPageMounted],
+  );
+
   useEffect(() => {
     console.log('[Calendar] mounted day pages', {
       storeKey: mountedDaysKey,
@@ -1320,6 +1355,22 @@ export default function CalendarScreen() {
     });
   }, []);
 
+  const handleDayPagerScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (programmaticDayScrollRef.current) return;
+      const index = Math.max(
+        0,
+        Math.min(pages.length - 1, Math.round(event.nativeEvent.contentOffset.x / width)),
+      );
+      if (visualDayPagerIndexRef.current === index) return;
+      const date = pages[index];
+      if (!date) return;
+      visualDayPagerIndexRef.current = index;
+      updateVisualSelectedDate(date);
+    },
+    [pages, updateVisualSelectedDate, width],
+  );
+
   const handlePagerSettle = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const index = Math.max(0, Math.min(pages.length - 1, Math.round(event.nativeEvent.contentOffset.x / width)));
@@ -1335,11 +1386,12 @@ export default function CalendarScreen() {
           pendingDayPagerIndexRef.current = targetIndex;
           setDayPagerBase(targetWeekStart);
         }
-        setVisualSelected(date);
+        visualDayPagerIndexRef.current = index;
+        updateVisualSelectedDate(date);
         scheduleSelectedCommit(date);
       }
     },
-    [dayPagerBase, markDayPageMounted, pages, scheduleSelectedCommit, width],
+    [dayPagerBase, markDayPageMounted, pages, scheduleSelectedCommit, updateVisualSelectedDate, width],
   );
 
   const handleSelectDate = useCallback(
@@ -1347,7 +1399,8 @@ export default function CalendarScreen() {
       if (isSameDay(date, visualSelected)) return;
       const targetWeekStart = startOfWeek(date);
       const index = dayPagerIndexForDate(date, targetWeekStart);
-      setVisualSelected(date);
+      visualDayPagerIndexRef.current = index;
+      updateVisualSelectedDate(date);
       markDayPageMounted(date);
       programmaticDayScrollRef.current = true;
       if (toISODate(targetWeekStart) !== toISODate(dayPagerBase)) {
@@ -1361,7 +1414,7 @@ export default function CalendarScreen() {
       }
       scheduleSelectedCommit(date);
     },
-    [dayPagerBase, markDayPageMounted, scheduleSelectedCommit, visualSelected],
+    [dayPagerBase, markDayPageMounted, scheduleSelectedCommit, updateVisualSelectedDate, visualSelected],
   );
 
   useEffect(() => {
@@ -1370,6 +1423,7 @@ export default function CalendarScreen() {
     pendingDayPagerIndexRef.current = null;
     requestAnimationFrame(() => {
       pagerRef.current?.scrollToIndex({ index: pendingIndex, animated: false });
+      visualDayPagerIndexRef.current = pendingIndex;
       requestAnimationFrame(() => {
         programmaticDayScrollRef.current = false;
       });
@@ -1507,6 +1561,8 @@ export default function CalendarScreen() {
             onScrollBeginDrag={() => {
               programmaticDayScrollRef.current = false;
             }}
+            onScroll={handleDayPagerScroll}
+            scrollEventThrottle={16}
             onMomentumScrollEnd={handlePagerSettle}
             initialNumToRender={3}
             maxToRenderPerBatch={2}
@@ -2018,6 +2074,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  monthCellToday: {
+    zIndex: 10,
+    elevation: 10,
+  },
   thumbGrayVeil: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(181,175,165,0.72)',
@@ -2044,6 +2104,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 6,
+    zIndex: 12,
+    elevation: 12,
   },
   monthTodayHalo: {
     position: 'absolute',
@@ -2060,7 +2122,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.45,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 0 },
-    elevation: 3,
+    zIndex: 11,
+    elevation: 11,
   },
   monthDayText: {
     ...typography.bodyStrong,
