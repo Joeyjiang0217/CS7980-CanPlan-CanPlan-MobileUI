@@ -46,6 +46,7 @@ type TaskViewNavigation = NativeStackNavigationProp<MainStackParamList, 'TaskVie
 type TaskViewRoute = RouteProp<MainStackParamList, 'TaskView'>;
 
 const TEAL = '#3DB8AD';
+const TEAL_DARK = '#2E9C92';
 const TEAL_LIGHT = '#EBF9F8';
 
 function scheduledOccurrenceMs(
@@ -534,6 +535,9 @@ export default function TaskViewScreen() {
   const [activeStepId, setActiveStepId] = useState<string>();
   const [skipConfirmVisible, setSkipConfirmVisible] = useState(false);
   const [unskipConfirmVisible, setUnskipConfirmVisible] = useState(false);
+  // "Mark as done now or later?" prompt. Tracks what opened it so "Later" can
+  // still navigate back when the prompt was triggered by the back button.
+  const [allDonePrompt, setAllDonePrompt] = useState<'auto' | 'back' | null>(null);
 
   // Completing/skipping the whole occurrence is persisted: the virtual occurrence
   // is materialized (startTaskInstance) and then given its final status. That
@@ -681,6 +685,27 @@ export default function TaskViewScreen() {
   const isLoading = taskQuery.isLoading || stepsQuery.isLoading;
   const error = taskQuery.error?.message;
 
+  // Offer to mark the occurrence done the moment the last step is checked off
+  // (transition only — entering the screen with everything checked stays quiet).
+  const canPromptAllDone = allDone && !isCompletedOcc && !isSkippedOcc;
+  const prevAllDoneRef = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevAllDoneRef.current;
+    prevAllDoneRef.current = allDone;
+    if (prev === false && canPromptAllDone) {
+      setAllDonePrompt('auto');
+    }
+  }, [allDone, canPromptAllDone]);
+
+  // Leaving with every step checked but the task not marked done? Ask first.
+  const handleBack = useCallback(() => {
+    if (canPromptAllDone) {
+      setAllDonePrompt('back');
+      return;
+    }
+    navigation.goBack();
+  }, [canPromptAllDone, navigation]);
+
   if (isLoading) {
     return (
       <View style={styles.centeredState}>
@@ -736,7 +761,7 @@ export default function TaskViewScreen() {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <BackButton onPress={() => navigation.goBack()} variant="dark" />
+        <BackButton onPress={handleBack} variant="dark" />
         <Text
           accessibilityRole="header"
           numberOfLines={2}
@@ -777,16 +802,31 @@ export default function TaskViewScreen() {
         )}
       </View>
 
-      {isInstance && stepCount > 0 && !isSkippedOcc && !isCompletedOcc ? (
+      {isInstance && stepCount > 0 && !isSkippedOcc ? (
         <View style={styles.progressWrap}>
-          <Text style={styles.progressLabel}>
-            {doneCount} of {stepCount} steps done
-          </Text>
+          <View style={styles.progressLabelRow}>
+            <Text style={styles.progressLabel}>
+              {/* A completed occurrence always reads as fully done — the local
+                  step checks are not persisted, so don't trust doneCount here. */}
+              {isCompletedOcc ? stepCount : doneCount} of {stepCount} steps done
+            </Text>
+            {isCompletedOcc ? (
+              <Ionicons name="checkmark-circle" size={22} color={colors.success} />
+            ) : allDone ? (
+              <Ionicons name="checkmark-circle" size={22} color={TEAL_DARK} />
+            ) : null}
+          </View>
           <View style={styles.progressTrack}>
             <View
               style={[
                 styles.progressFill,
-                { width: `${stepCount ? (doneCount / stepCount) * 100 : 0}%` },
+                {
+                  width: `${
+                    stepCount
+                      ? ((isCompletedOcc ? stepCount : doneCount) / stepCount) * 100
+                      : 0
+                  }%`,
+                },
               ]}
             />
           </View>
@@ -908,6 +948,24 @@ export default function TaskViewScreen() {
           void unskipOccurrence();
         }}
         onCancel={() => setUnskipConfirmVisible(false)}
+      />
+      <ConfirmDialog
+        visible={allDonePrompt !== null}
+        title="All steps done!"
+        message="Great work — do you want to mark this task as done now?"
+        confirmLabel="Mark as done"
+        cancelLabel="Later"
+        onConfirm={() => {
+          setAllDonePrompt(null);
+          void finishOccurrence('COMPLETED');
+        }}
+        onCancel={() => {
+          const source = allDonePrompt;
+          setAllDonePrompt(null);
+          if (source === 'back') {
+            navigation.goBack();
+          }
+        }}
       />
     </View>
   );
@@ -1120,6 +1178,11 @@ const styles = StyleSheet.create({
   progressWrap: {
     paddingHorizontal: spacing.xl,
     paddingBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  progressLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.sm,
   },
   progressLabel: {
