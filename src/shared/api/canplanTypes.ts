@@ -244,38 +244,22 @@ export interface TaskStepsResponse {
   outputTokens?: number | null;
 }
 
+/**
+ * Preview step from createAiTask. Citations exist on the wire but this app never
+ * fetches them (the UI stays deliberately minimal to reduce cognitive load).
+ */
 export interface GeneratedAiTaskStep {
   text: string;
-  citations: Citation[];
 }
 
 export interface GeneratedAiTask {
   title: string;
   steps: GeneratedAiTaskStep[];
+  /** false = ungrounded fallback (source UNGROUNDED_AI); the UI shows an AI notice. */
   grounded: boolean;
   source: AiTaskGenerationSource;
   inputTokens?: number | null;
   outputTokens?: number | null;
-}
-
-export interface Report {
-  reportId: string;
-  scope?: JsonValue | null;
-  dateRange?: JsonValue | null;
-  s3Key?: string | null;
-  createdBy?: string | null;
-  createdAt: string;
-  narrative?: string | null;
-  stats?: JsonValue | null;
-}
-
-export interface GeneratedReport {
-  draftToken: string;
-  scope?: JsonValue | null;
-  dateRange?: JsonValue | null;
-  generatedAt: string;
-  narrative: string;
-  stats?: JsonValue | null;
 }
 
 export interface AdminUserResult {
@@ -310,6 +294,14 @@ export interface AdminDeleteOrganizationResult {
 export interface TaskInstanceLookupResult {
   instanceId: string;
   item?: TaskInstance | null;
+}
+
+export interface CreateAiTaskInput {
+  query: string;
+  /** Omitted ⇒ backend defaults to GROUNDED_ONLY; this app always sends ALLOW_UNGROUNDED_FALLBACK. */
+  groundingMode?: AiTaskGroundingMode;
+  /** Optional 1..20; this app never sends it (AI picks the count). */
+  stepCount?: number;
 }
 
 export interface Connection<T> {
@@ -535,25 +527,16 @@ export interface GenerateTaskStepsInput {
   } | null;
 }
 
-export interface CreateAiTaskInput {
-  query: string;
-  groundingMode?: AiTaskGroundingMode | null;
-  stepCount?: number | null;
+// ─── AI progress reports ────────────────────────────────────────────────────
+
+export interface ReportScope {
+  userId: string;
 }
 
-export interface GenerateReportInput {
-  userId: string;
+export interface ReportDateRange {
+  /** AWSDate strings (YYYY-MM-DD), inclusive. */
   from: string;
   to: string;
-}
-
-export interface SaveReportInput {
-  draftToken: string;
-  scope: JsonValue;
-  dateRange: JsonValue;
-  generatedAt: string;
-  narrative: string;
-  stats: JsonValue;
 }
 
 export interface InviteUserInput {
@@ -594,4 +577,95 @@ export interface DeleteOrganizationInput {
 export interface AdminSetUserOrganizationInput {
   userId: string;
   organizationId?: string | null;
+}
+
+/**
+ * Report metadata row. `scope` / `dateRange` travel as AWSJSON strings on the
+ * wire; the API client parses them into objects before returning.
+ */
+export interface Report {
+  reportId: string;
+  scope?: ReportScope | null;
+  dateRange?: ReportDateRange | null;
+  s3Key?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+}
+
+export interface GenerateReportInput {
+  userId: string;
+  /** YYYY-MM-DD, inclusive; the backend caps the span at 366 days. */
+  from: string;
+  to: string;
+}
+
+/** Deterministic statistics computed by the backend over a date range. */
+export interface ReportStats {
+  meta: {
+    userId: string;
+    from: string;
+    to: string;
+    /** Rates cover attempted (acted-on) instances only. */
+    basis: 'attempted-instances-only';
+    totalInstances: number;
+  };
+  completion: {
+    completed: number;
+    skipped: number;
+    cancelled: number;
+    overdue: number;
+    inProgress: number;
+    toDo: number;
+    /** 0–1 fraction, rounded to 4 decimals. */
+    completionRate: number;
+  };
+  trend: Array<{ weekStart: string; completed: number; total: number; completionRate: number }>;
+  byCategory: Array<{
+    categoryId: string;
+    categoryName: string;
+    completed: number;
+    total: number;
+    completionRate: number;
+  }>;
+  byTask: Array<{
+    taskId: string;
+    title: string;
+    completed: number;
+    total: number;
+    completionRate: number;
+  }>;
+  stepDwell: Array<{
+    taskId: string;
+    title: string;
+    stepOrder: number;
+    stepText: string;
+    samples: number;
+    avgSeconds: number;
+  }>;
+  focus: {
+    byTask: Array<{ taskId: string; title: string; samples: number; avgActiveSeconds: number }>;
+    focusRatio: number | null;
+  };
+  skipPatterns: {
+    byTask: Array<{ taskId: string; title: string; skipped: number }>;
+    byHour: number[];
+  };
+  abandonment: Array<{
+    instanceId: string;
+    taskId: string;
+    title: string;
+    stalledAtStepOrder: number | null;
+  }>;
+  timeOfDay: number[];
+}
+
+/** The full report JSON stored in S3: stats + the AI narrative. */
+export interface ReportDocument {
+  reportId: string;
+  scope: ReportScope;
+  dateRange: ReportDateRange;
+  createdBy: string;
+  createdAt: string;
+  stats: ReportStats;
+  narrative: string;
 }

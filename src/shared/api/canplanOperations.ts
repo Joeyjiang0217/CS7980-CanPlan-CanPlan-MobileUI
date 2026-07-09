@@ -50,7 +50,7 @@ const TASK_INSTANCE_VIEW_FIELDS = /* GraphQL */ `
 `;
 
 const REPORT_FIELDS = /* GraphQL */ `
-  reportId scope dateRange s3Key createdBy createdAt narrative stats
+  reportId scope dateRange s3Key createdBy createdAt
 `;
 
 const ADMIN_USER_RESULT_FIELDS = /* GraphQL */ `
@@ -83,6 +83,15 @@ export const LIST_MY_ORGANIZATION_USERS = /* GraphQL */ `
 export const LIST_MY_SUPPORT_LIST = /* GraphQL */ `
   query ListMySupportList($limit: Int, $nextToken: String) {
     listMySupportList(limit: $limit, nextToken: $nextToken) {
+      items { ${SUPPORT_LINK_FIELDS} }
+      nextToken
+    }
+  }
+`;
+
+export const LIST_PRIMARY_USERS_BY_SUPPORTER = /* GraphQL */ `
+  query ListPrimaryUsersBySupporter($supporterId: ID!, $limit: Int, $nextToken: String) {
+    listPrimaryUsersBySupporter(supporterId: $supporterId, limit: $limit, nextToken: $nextToken) {
       items { ${SUPPORT_LINK_FIELDS} }
       nextToken
     }
@@ -322,7 +331,7 @@ export const CREATE_AI_TASK = /* GraphQL */ `
   mutation CreateAiTask($input: CreateAiTaskInput!) {
     createAiTask(input: $input) {
       title
-      steps { text citations { chunkId title url snippet } }
+      steps { text }
       grounded source inputTokens outputTokens
     }
   }
@@ -461,21 +470,7 @@ export const GENERATE_TASK_STEPS = /* GraphQL */ `
 
 export const GENERATE_REPORT = /* GraphQL */ `
   mutation GenerateReport($input: GenerateReportInput!) {
-    generateReport(input: $input) {
-      draftToken scope dateRange generatedAt narrative stats
-    }
-  }
-`;
-
-export const SAVE_REPORT = /* GraphQL */ `
-  mutation SaveReport($input: SaveReportInput!) {
-    saveReport(input: $input) { ${REPORT_FIELDS} }
-  }
-`;
-
-export const DELETE_REPORT = /* GraphQL */ `
-  mutation DeleteReport($userId: ID!, $reportId: ID!) {
-    deleteReport(userId: $userId, reportId: $reportId)
+    generateReport(input: $input) { ${REPORT_FIELDS} }
   }
 `;
 

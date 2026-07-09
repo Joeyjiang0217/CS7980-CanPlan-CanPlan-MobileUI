@@ -61,9 +61,11 @@ export const queryKeys = {
   },
   reports: {
     all: ['reports'] as const,
-    user: (userId: string, limit?: number) =>
-      ['reports', 'user', userId, limit] as const,
-    download: (userId: string, reportId: string) =>
-      ['reports', 'download', userId, reportId] as const,
+    list: (userId: string, limit?: number) =>
+      ['reports', 'list', userId, limit] as const,
+    document: (userId: string, reportId: string) =>
+      ['reports', 'document', userId, reportId] as const,
+    linkedPrimaryUsers: (supporterId: string) =>
+      ['reports', 'linkedPrimaryUsers', supporterId] as const,
   },
 };

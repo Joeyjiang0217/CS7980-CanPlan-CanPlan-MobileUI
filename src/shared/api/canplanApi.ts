@@ -38,7 +38,6 @@ import type {
   GenerateReportInput,
   GenerateTaskStepsInput,
   GeneratedAiTask,
-  GeneratedReport,
   InviteUserInput,
   JsonValue,
   MediaAsset,
@@ -49,7 +48,6 @@ import type {
   PauseTaskInstanceTimerInput,
   Report,
   ReorderTaskStepsInput,
-  SaveReportInput,
   SelectPrimaryUserInput,
   SetTaskInstanceStepCompletionInput,
   SetSystemAdminInput,
@@ -79,18 +77,6 @@ import type {
 
 type RawUserProfile = Omit<UserProfile, 'accessibilitySettings'> & {
   accessibilitySettings?: string | null;
-};
-
-type RawReport = Omit<Report, 'scope' | 'dateRange' | 'stats'> & {
-  scope?: string | null;
-  dateRange?: string | null;
-  stats?: string | null;
-};
-
-type RawGeneratedReport = Omit<GeneratedReport, 'scope' | 'dateRange' | 'stats'> & {
-  scope?: string | null;
-  dateRange?: string | null;
-  stats?: string | null;
 };
 
 type RawAdminUserResult = Omit<AdminUserResult, 'profile'> & {
@@ -132,24 +118,6 @@ function mapUserProfile(profile: RawUserProfile): UserProfile {
   };
 }
 
-function mapReport(report: RawReport): Report {
-  return {
-    ...report,
-    scope: parseAwsJson(report.scope, 'Report.scope'),
-    dateRange: parseAwsJson(report.dateRange, 'Report.dateRange'),
-    stats: parseAwsJson(report.stats, 'Report.stats'),
-  };
-}
-
-function mapGeneratedReport(report: RawGeneratedReport): GeneratedReport {
-  return {
-    ...report,
-    scope: parseAwsJson(report.scope, 'GeneratedReport.scope'),
-    dateRange: parseAwsJson(report.dateRange, 'GeneratedReport.dateRange'),
-    stats: parseAwsJson(report.stats, 'GeneratedReport.stats'),
-  };
-}
-
 function mapAdminUserResult(result: RawAdminUserResult): AdminUserResult {
   return {
     ...result,
@@ -161,6 +129,22 @@ function mapAdminUserData(data: RawAdminUserData): AdminUserData {
   return {
     ...data,
     profile: data.profile ? mapUserProfile(data.profile) : data.profile,
+  };
+}
+
+type RawReport = Omit<Report, 'scope' | 'dateRange'> & {
+  scope?: string | null;
+  dateRange?: string | null;
+};
+
+function mapReport(report: RawReport): Report {
+  return {
+    ...report,
+    scope: parseAwsJson(report.scope, 'Report.scope') as unknown as Report['scope'],
+    dateRange: parseAwsJson(
+      report.dateRange,
+      'Report.dateRange',
+    ) as unknown as Report['dateRange'],
   };
 }
 
@@ -216,6 +200,17 @@ export const canPlanApi = {
       PageInput
     >(operations.LIST_MY_SUPPORT_LIST, pageVariables(page));
     return data.listMySupportList;
+  },
+
+  async listPrimaryUsersBySupporter(
+    supporterId: string,
+    page: PageInput = {},
+  ): Promise<Connection<SupportLink>> {
+    const data = await graphqlRequest<
+      { listPrimaryUsersBySupporter: Connection<SupportLink> },
+      { supporterId: string } & PageInput
+    >(operations.LIST_PRIMARY_USERS_BY_SUPPORTER, { supporterId, ...pageVariables(page) });
+    return data.listPrimaryUsersBySupporter;
   },
 
   async listMyCategories(
@@ -696,41 +691,12 @@ export const canPlanApi = {
     return data.generateTaskSteps;
   },
 
-  async generateReport(input: GenerateReportInput): Promise<GeneratedReport> {
+  async generateReport(input: GenerateReportInput): Promise<Report> {
     const data = await graphqlRequest<
-      { generateReport: RawGeneratedReport },
+      { generateReport: RawReport },
       { input: GenerateReportInput }
     >(operations.GENERATE_REPORT, { input });
-    return mapGeneratedReport(data.generateReport);
-  },
-
-  async saveReport(input: SaveReportInput): Promise<Report> {
-    const data = await graphqlRequest<
-      { saveReport: RawReport },
-      {
-        input: Omit<SaveReportInput, 'scope' | 'dateRange' | 'stats'> & {
-          scope: string;
-          dateRange: string;
-          stats: string;
-        };
-      }
-    >(operations.SAVE_REPORT, {
-      input: {
-        ...input,
-        scope: JSON.stringify(input.scope),
-        dateRange: JSON.stringify(input.dateRange),
-        stats: JSON.stringify(input.stats),
-      },
-    });
-    return mapReport(data.saveReport);
-  },
-
-  async deleteReport(userId: string, reportId: string): Promise<boolean> {
-    const data = await graphqlRequest<
-      { deleteReport: boolean },
-      { userId: string; reportId: string }
-    >(operations.DELETE_REPORT, { userId, reportId });
-    return data.deleteReport;
+    return mapReport(data.generateReport);
   },
 
   async inviteSupportPerson(input: InviteUserInput): Promise<AdminUserResult> {

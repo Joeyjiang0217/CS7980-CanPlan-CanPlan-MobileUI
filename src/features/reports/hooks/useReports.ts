@@ -1,70 +1,90 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 
+import { canPlanApi } from '../../../shared/api/canplanApi';
 import type {
   GenerateReportInput,
-  SaveReportInput,
+  SupportLink,
 } from '../../../shared/api/canplanTypes';
 import { queryKeys } from '../../../shared/query/queryKeys';
-import {
-  deleteReport,
-  generateReport,
-  getReportDownloadUrl,
-  listReports,
-  saveReport,
-} from '../api/reportApi';
+import { fetchReportDocument, generateReport, listReports } from '../api/reportApi';
 
-/** Paginated saved reports for a primary user, newest first. */
-export function useReports(userId: string, limit = 50, enabled = true) {
+/** Paginated report history for one cared-for user, newest first. */
+export function useReports(userId: string, limit = 20) {
   return useInfiniteQuery({
-    queryKey: queryKeys.reports.user(userId, limit),
+    queryKey: queryKeys.reports.list(userId, limit),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => listReports(userId, { limit, nextToken: pageParam }),
     getNextPageParam: (lastPage) => lastPage.nextToken ?? undefined,
-    enabled: enabled && Boolean(userId),
+    enabled: Boolean(userId),
   });
 }
 
-/** Short-lived download URL for a saved report JSON document. */
-export function useReportDownloadUrl(
-  userId: string,
-  reportId: string,
-  enabled = true,
-) {
-  return useQuery({
-    queryKey: queryKeys.reports.download(userId, reportId),
-    queryFn: () => getReportDownloadUrl(userId, reportId),
-    enabled: enabled && Boolean(userId) && Boolean(reportId),
-  });
-}
-
-/** Generates a non-persisted report preview with a draft token. */
+/** Generates a report. Synchronous on the backend — can take tens of seconds. */
 export function useGenerateReport() {
-  return useMutation({
-    mutationFn: (input: GenerateReportInput) => generateReport(input),
-  });
-}
-
-/** Saves a generated report preview. */
-export function useSaveReport() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: SaveReportInput) => saveReport(input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+    mutationFn: (input: GenerateReportInput) => generateReport(input),
+    onSuccess: (_report, input) => {
+      // Prefix-invalidate every page-size variant of this user's report list.
+      void queryClient.invalidateQueries({
+        queryKey: ['reports', 'list', input.userId],
+      });
     },
   });
 }
 
-/** Deletes a saved report for a primary user. */
-export function useDeleteReport() {
-  const queryClient = useQueryClient();
+/** Full report JSON from S3. Immutable once written — cache forever. */
+export function useReportDocument(userId: string, reportId: string) {
+  return useQuery({
+    queryKey: queryKeys.reports.document(userId, reportId),
+    queryFn: () => fetchReportDocument(userId, reportId),
+    enabled: Boolean(userId) && Boolean(reportId),
+    staleTime: Infinity,
+  });
+}
 
-  return useMutation({
-    mutationFn: ({ userId, reportId }: { userId: string; reportId: string }) =>
-      deleteReport(userId, reportId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+export interface LinkedPrimaryUser {
+  userId: string;
+  displayName: string | null;
+}
+
+/**
+ * ACTIVE primary users linked to this supporter, with display names resolved
+ * (SupportLink carries only ids). Pages through every link, then fetches
+ * profiles in parallel; a missing profile degrades to displayName null.
+ */
+export function useLinkedPrimaryUsers(supporterId: string) {
+  return useQuery({
+    queryKey: queryKeys.reports.linkedPrimaryUsers(supporterId),
+    enabled: Boolean(supporterId),
+    queryFn: async (): Promise<LinkedPrimaryUser[]> => {
+      const links: SupportLink[] = [];
+      let nextToken: string | undefined;
+      do {
+        const page = await canPlanApi.listPrimaryUsersBySupporter(supporterId, {
+          limit: 50,
+          nextToken,
+        });
+        links.push(...page.items);
+        nextToken = page.nextToken ?? undefined;
+      } while (nextToken);
+
+      const active = links.filter((link) => link.status === 'ACTIVE');
+      const profiles = await Promise.all(
+        active.map((link) =>
+          canPlanApi.getUserProfile(link.primaryUserId).catch(() => null),
+        ),
+      );
+      return active.map((link, index) => ({
+        userId: link.primaryUserId,
+        displayName: profiles[index]?.displayName ?? null,
+      }));
     },
   });
 }

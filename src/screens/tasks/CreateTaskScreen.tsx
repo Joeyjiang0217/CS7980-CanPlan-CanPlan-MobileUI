@@ -25,8 +25,10 @@ import {
 import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useCreateAiTask } from '../../features/ai/hooks/useCreateAiTask';
 import {
   useCreateTask,
+  useCreateTaskStep,
   useDeleteTask,
   useDeleteTaskStep,
   useTaskSteps,
@@ -241,6 +243,8 @@ export default function CreateTaskScreen() {
   const deleteTaskStepMutation = useDeleteTaskStep();
   const createCoverUploadUrlMutation = useCreateTaskCoverImageUploadUrl();
   const deleteMediaAssetMutation = useDeleteMediaAsset();
+  const createAiTaskMutation = useCreateAiTask();
+  const createTaskStepMutation = useCreateTaskStep();
   const existingTaskQuery = useTask(existingTaskId ?? '');
   const [taskId, setTaskId] = useState<string>();
   const activeTaskId = existingTaskId ?? taskId ?? '';
@@ -278,6 +282,7 @@ export default function CreateTaskScreen() {
   const [exitDestination, setExitDestination] = useState<'all-tasks' | 'back' | 'schedule'>();
   const [busyAction, setBusyAction] = useState<string>();
   const [inlineError, setInlineError] = useState<string>();
+  const [aiStepsNotice, setAiStepsNotice] = useState(false);
   const [hydratedTaskId, setHydratedTaskId] = useState<string>();
   const categoriesQuery = useMyCategories(Boolean(categoryOwnerId), 50, categoryOwnerId);
   const taskOperationRef = useRef<string | undefined>(undefined);
@@ -285,6 +290,8 @@ export default function CreateTaskScreen() {
 
   const isBusy =
     Boolean(busyAction) ||
+    createAiTaskMutation.isPending ||
+    createTaskStepMutation.isPending ||
     createTaskMutation.isPending ||
     deleteTaskMutation.isPending ||
     updateTaskMutation.isPending ||
@@ -733,6 +740,61 @@ export default function CreateTaskScreen() {
     }
   };
 
+  const handleGenerateAiSteps = async () => {
+    if (!taskId || !trimmedTitle || isBusy || steps.length > 0) {
+      return;
+    }
+
+    setBusyAction('ai-steps');
+    setInlineError(undefined);
+    setAiStepsNotice(false);
+    try {
+      const generated = await createAiTaskMutation.mutateAsync({
+        query: trimmedTitle,
+        groundingMode: 'ALLOW_UNGROUNDED_FALLBACK',
+      });
+      const stepTexts = generated.steps
+        .map((generatedStep) => generatedStep.text.trim())
+        .filter((text) => text.length > 0);
+      if (stepTexts.length === 0) {
+        throw new Error('AI could not create steps for this task. Please try again or add steps yourself.');
+      }
+      // Set before persisting: the notice only renders once steps exist, and a
+      // partially created batch is still AI-generated.
+      if (!generated.grounded) {
+        setAiStepsNotice(true);
+      }
+
+      // This screen's steps are server-backed (synced from useTaskSteps), so
+      // persist each generated step; local-only entries would be overwritten.
+      // Append to local state per step so a partial failure still shows what
+      // was created and the AI card stays hidden instead of re-creating order 1.
+      for (const [index, text] of stepTexts.entries()) {
+        const createdStep = await createTaskStepMutation.mutateAsync({
+          taskId,
+          order: index + 1,
+          text,
+        });
+        if (!createdStep) {
+          throw new Error('Some steps could not be added. Please review the list below.');
+        }
+        setSteps((currentSteps) => [
+          ...currentSteps,
+          {
+            stepId: createdStep.stepId,
+            order: createdStep.order,
+            text: createdStep.text,
+            mediaAssets: createdStep.mediaAssets,
+          },
+        ]);
+      }
+    } catch (error) {
+      setInlineError(errorMessage(error));
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
   const handleDiscardDraft = async () => {
     if (!taskId || isBusy) {
       return;
@@ -900,6 +962,53 @@ export default function CreateTaskScreen() {
             }}
           />
         </View>
+
+        {/* isSuccess: never offer AI steps until the server confirms the task has none
+            (a failed steps query would otherwise leave steps=[] for a task that has some). */}
+        {taskId && existingStepsQuery.isSuccess && (steps.length === 0 || busyAction === 'ai-steps') ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Create steps with AI"
+            accessibilityState={{ disabled: isBusy, busy: busyAction === 'ai-steps' }}
+            disabled={isBusy}
+            onPress={() => {
+              void handleGenerateAiSteps();
+            }}
+            style={({ pressed }) => [
+              styles.aiSuggestCard,
+              pressed && !isBusy ? styles.addPhotoActionPressed : null,
+              isBusy && busyAction !== 'ai-steps' ? styles.controlDisabled : null,
+            ]}
+          >
+            {busyAction === 'ai-steps' ? (
+              <>
+                <ActivityIndicator color={colors.primary} />
+                <View style={styles.aiSuggestCopy}>
+                  <Text style={styles.aiSuggestTitle}>Creating steps…</Text>
+                  <Text style={styles.aiSuggestDescription}>This can take a few seconds.</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <Ionicons name="sparkles-outline" size={24} color={colors.primary} />
+                <View style={styles.aiSuggestCopy}>
+                  <Text style={styles.aiSuggestTitle}>Create the steps with AI</Text>
+                  <Text style={styles.aiSuggestDescription}>
+                    Tap to let AI suggest steps. You can edit or delete them after.
+                  </Text>
+                </View>
+              </>
+            )}
+          </Pressable>
+        ) : null}
+        {steps.length > 0 && aiStepsNotice ? (
+          <View accessibilityRole="alert" style={styles.aiNotice}>
+            <Ionicons name="sparkles-outline" size={18} color={colors.warning} />
+            <Text style={styles.aiNoticeText}>
+              These steps were created by AI, not from CanPlan&apos;s guidance. Please check each one.
+            </Text>
+          </View>
+        ) : null}
 
         <Pressable
           accessibilityRole="button"
@@ -1543,6 +1652,43 @@ const styles = StyleSheet.create({
   addStepText: {
     ...typography.heading,
     color: colors.primary,
+  },
+  aiSuggestCard: {
+    minHeight: 76,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg + spacing.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceWarm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  aiSuggestCopy: {
+    flex: 1,
+  },
+  aiSuggestTitle: {
+    ...typography.bodyStrong,
+    color: colors.primary,
+  },
+  aiSuggestDescription: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+  },
+  aiNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(181, 104, 11, 0.08)',
+  },
+  aiNoticeText: {
+    flex: 1,
+    ...typography.caption,
+    color: colors.warning,
   },
   disabledText: {
     color: colors.disabled,
