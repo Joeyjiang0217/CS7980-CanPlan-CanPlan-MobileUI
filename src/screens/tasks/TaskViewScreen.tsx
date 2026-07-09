@@ -704,36 +704,33 @@ export default function TaskViewScreen() {
 
   const task = taskQuery.data;
   const unskipControl = (
-    <View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ disabled: isFinishing }}
-        accessibilityLabel="Un-skip this task"
-        disabled={isFinishing}
-        onPress={() => setUnskipConfirmVisible(true)}
-        style={({ pressed }) => [
-          styles.statusNotice,
-          styles.statusNoticeUnskip,
-          pressed ? styles.pressed : null,
-          isFinishing ? styles.statusNoticeDisabled : null,
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: isFinishing }}
+      accessibilityLabel="Un-skip this task"
+      disabled={isFinishing}
+      onPress={() => setUnskipConfirmVisible(true)}
+      style={({ pressed }) => [
+        styles.statusNotice,
+        styles.statusNoticeUnskip,
+        pressed ? styles.pressed : null,
+        isFinishing ? styles.statusNoticeDisabled : null,
+      ]}
+    >
+      <Ionicons
+        name="arrow-undo"
+        size={20}
+        color={isFinishing ? colors.disabled : colors.onPrimary}
+      />
+      <Text
+        style={[
+          styles.statusNoticeText,
+          { color: isFinishing ? colors.disabled : colors.onPrimary },
         ]}
       >
-        <Ionicons
-          name="arrow-undo"
-          size={20}
-          color={isFinishing ? colors.disabled : colors.onPrimary}
-        />
-        <Text
-          style={[
-            styles.statusNoticeText,
-            { color: isFinishing ? colors.disabled : colors.onPrimary },
-          ]}
-        >
-          {isFinishing ? 'Saving…' : 'Un-skip'}
-        </Text>
-      </Pressable>
-      <View style={styles.statusHintSpacer} />
-    </View>
+        {isFinishing ? 'Saving…' : 'Un-skip'}
+      </Text>
+    </Pressable>
   );
 
   return (
@@ -796,92 +793,96 @@ export default function TaskViewScreen() {
         </View>
       ) : null}
 
-      <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: insets.bottom + spacing.xxl },
-        ]}
-        showsVerticalScrollIndicator={false}
-      >
-        {isOverdueOcc ? (
-          <View style={styles.overdueBanner}>
-            <Ionicons name="alert-circle" size={18} color={colors.danger} />
-            <Text style={styles.overdueBannerText}>
-              Overdue — you can still finish or skip this.
-            </Text>
-          </View>
-        ) : null}
-
-        {isSkippedOcc ? unskipControl : null}
-
-        {stepCount === 0 ? (
-          <View style={styles.emptyState}>
-            <Ionicons name="list-outline" size={40} color={colors.primary} />
-            <Text style={styles.emptyTitle}>No steps yet</Text>
-            <Text style={styles.emptyText}>This task doesn’t have any steps.</Text>
-          </View>
-        ) : (
-          <View style={styles.stepList}>
-            {steps.map((step, index) => (
-              <StepCard
-                key={step.stepId}
-                taskId={taskId}
-                step={step}
-                index={index}
-                isActive={activeStepId === step.stepId}
-                onActivate={activateStep}
-                onDeactivate={deactivateStep}
-                isInstance={isInstance}
-                completed={completedSteps.has(step.stepId)}
-                showCompletionControl={!isSkippedOcc}
-                checkReadOnly={isCompletedOcc}
-                onToggleComplete={() => occKey && toggleOccurrenceStep(occKey, step.stepId)}
-                onOpenDetail={() =>
-                  navigation.navigate('StepDetail', {
-                    taskId,
-                    stepId: step.stepId,
-                    ...(isInstance
-                      ? { assignmentId, scheduledDate, scheduledTime }
-                      : {}),
-                  })
-                }
-              />
-            ))}
-          </View>
-        )}
-
-        {isInstance && stepCount > 0 ? (
-          isCompletedOcc ? (
-            // A done occurrence can't be skipped (req: done ↛ skipped).
-            <View style={[styles.statusNotice, styles.statusNoticeDone]}>
-              <Ionicons name="checkmark-circle" size={22} color={colors.success} />
-              <Text style={[styles.statusNoticeText, { color: colors.success }]}>Completed</Text>
-            </View>
-          ) : isSkippedOcc ? null : allDone ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Great job, mark this task done"
-              accessibilityState={{ disabled: isFinishing }}
-              disabled={isFinishing}
-              onPress={() => void finishOccurrence('COMPLETED')}
-              style={({ pressed }) => [styles.completeButton, pressed ? styles.pressed : null]}
-            >
-              <Text style={styles.completeTitle}>Great job!</Text>
-              <Text style={styles.completeSubtitle}>
-                {isFinishing ? 'Saving…' : 'You finished all the steps — tap to mark done.'}
+      <View style={styles.scrollArea}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.content,
+            { paddingBottom: insets.bottom + spacing.xxl },
+            isSkippedOcc ? styles.contentUnderUnskip : null,
+          ]}
+          showsVerticalScrollIndicator={false}
+        >
+          {isOverdueOcc ? (
+            <View style={styles.overdueBanner}>
+              <Ionicons name="alert-circle" size={18} color={colors.danger} />
+              <Text style={styles.overdueBannerText}>
+                Overdue — you can still finish or skip this.
               </Text>
-            </Pressable>
-          ) : (
-            <HoldToSkipButton onComplete={() => setSkipConfirmVisible(true)} />
-          )
-        ) : null}
+            </View>
+          ) : null}
 
-        {finishError ? (
-          <Text accessibilityRole="alert" style={styles.finishError}>
-            {finishError}
-          </Text>
-        ) : null}
-      </ScrollView>
+          {stepCount === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="list-outline" size={40} color={colors.primary} />
+              <Text style={styles.emptyTitle}>No steps yet</Text>
+              <Text style={styles.emptyText}>This task doesn’t have any steps.</Text>
+            </View>
+          ) : (
+            <View style={styles.stepList}>
+              {steps.map((step, index) => (
+                <StepCard
+                  key={step.stepId}
+                  taskId={taskId}
+                  step={step}
+                  index={index}
+                  isActive={activeStepId === step.stepId}
+                  onActivate={activateStep}
+                  onDeactivate={deactivateStep}
+                  isInstance={isInstance}
+                  completed={completedSteps.has(step.stepId)}
+                  showCompletionControl={!isSkippedOcc}
+                  checkReadOnly={isCompletedOcc}
+                  onToggleComplete={() => occKey && toggleOccurrenceStep(occKey, step.stepId)}
+                  onOpenDetail={() =>
+                    navigation.navigate('StepDetail', {
+                      taskId,
+                      stepId: step.stepId,
+                      ...(isInstance
+                        ? { assignmentId, scheduledDate, scheduledTime }
+                        : {}),
+                    })
+                  }
+                />
+              ))}
+            </View>
+          )}
+
+          {isInstance && stepCount > 0 ? (
+            isCompletedOcc ? (
+              // A done occurrence can't be skipped (req: done ↛ skipped).
+              <View style={[styles.statusNotice, styles.statusNoticeDone]}>
+                <Ionicons name="checkmark-circle" size={22} color={colors.success} />
+                <Text style={[styles.statusNoticeText, { color: colors.success }]}>Completed</Text>
+              </View>
+            ) : isSkippedOcc ? null : allDone ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Great job, mark this task done"
+                accessibilityState={{ disabled: isFinishing }}
+                disabled={isFinishing}
+                onPress={() => void finishOccurrence('COMPLETED')}
+                style={({ pressed }) => [styles.completeButton, pressed ? styles.pressed : null]}
+              >
+                <Text style={styles.completeTitle}>Great job!</Text>
+                <Text style={styles.completeSubtitle}>
+                  {isFinishing ? 'Saving…' : 'You finished all the steps — tap to mark done.'}
+                </Text>
+              </Pressable>
+            ) : (
+              <HoldToSkipButton onComplete={() => setSkipConfirmVisible(true)} />
+            )
+          ) : null}
+
+          {finishError ? (
+            <Text accessibilityRole="alert" style={styles.finishError}>
+              {finishError}
+            </Text>
+          ) : null}
+        </ScrollView>
+
+        {/* Skipped occurrence: the un-skip control floats above the scrolling steps. */}
+        {isSkippedOcc ? <View style={styles.unskipFloat}>{unskipControl}</View> : null}
+      </View>
 
       <ConfirmDialog
         visible={skipConfirmVisible}
@@ -953,6 +954,21 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: spacing.xl,
     gap: spacing.lg,
+  },
+  scrollArea: {
+    flex: 1,
+  },
+  // Floating un-skip pill pinned over the top of the scrolling step list.
+  unskipFloat: {
+    position: 'absolute',
+    top: 0,
+    left: spacing.xl,
+    right: spacing.xl,
+  },
+  // Clears the floating un-skip pill (56px tall) so content starts below it,
+  // matching the old in-flow spacing (spacer + list gap).
+  contentUnderUnskip: {
+    paddingTop: 56 + spacing.lg * 2,
   },
   emptyState: {
     minHeight: 220,
@@ -1280,6 +1296,7 @@ const styles = StyleSheet.create({
   statusNoticeUnskip: {
     backgroundColor: colors.primary,
     borderColor: colors.primaryDark,
+    ...shadow.cardStrong,
   },
   statusNoticeDisabled: {
     backgroundColor: colors.surfaceWarm,
@@ -1288,9 +1305,6 @@ const styles = StyleSheet.create({
   statusNoticeText: {
     ...typography.button,
     color: colors.textMuted,
-  },
-  statusHintSpacer: {
-    height: spacing.lg,
   },
   pressed: {
     opacity: 0.72,
