@@ -137,6 +137,8 @@ interface StepCardProps {
   isInstance: boolean;
   completed: boolean;
   showCompletionControl?: boolean;
+  /** Completed-occurrence view: the check is a static green indicator, not a button. */
+  checkReadOnly?: boolean;
   onToggleComplete: () => void;
   /** Open the single-step focus view (tapping the title area). */
   onOpenDetail: () => void;
@@ -152,6 +154,7 @@ function StepCard({
   isInstance,
   completed,
   showCompletionControl = true,
+  checkReadOnly = false,
   onToggleComplete,
   onOpenDetail,
 }: StepCardProps) {
@@ -421,23 +424,32 @@ function StepCard({
           />
         </Pressable>
         {isInstance && showCompletionControl ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={completed ? 'Mark step not done' : 'Mark step done'}
-            accessibilityState={{ selected: completed }}
-            onPress={onToggleComplete}
-            style={({ pressed }) => [
-              styles.checkButton,
-              completed ? styles.checkButtonDone : null,
-              pressed ? styles.pressed : null,
-            ]}
-          >
-            <Ionicons
-              name={completed ? 'arrow-undo' : 'checkmark'}
-              size={18}
-              color={completed ? colors.danger : TEAL}
-            />
-          </Pressable>
+          checkReadOnly ? (
+            <View
+              accessibilityLabel="Step done"
+              style={[styles.checkButton, styles.checkButtonReadOnly]}
+            >
+              <Ionicons name="checkmark" size={18} color={colors.success} />
+            </View>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={completed ? 'Mark step not done' : 'Mark step done'}
+              accessibilityState={{ selected: completed }}
+              onPress={onToggleComplete}
+              style={({ pressed }) => [
+                styles.checkButton,
+                completed ? styles.checkButtonDone : null,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons
+                name={completed ? 'arrow-undo' : 'checkmark'}
+                size={18}
+                color={completed ? colors.danger : TEAL}
+              />
+            </Pressable>
+          )
         ) : null}
       </View>
     </View>
@@ -768,7 +780,7 @@ export default function TaskViewScreen() {
         )}
       </View>
 
-      {isInstance && stepCount > 0 && !isSkippedOcc ? (
+      {isInstance && stepCount > 0 && !isSkippedOcc && !isCompletedOcc ? (
         <View style={styles.progressWrap}>
           <Text style={styles.progressLabel}>
             {doneCount} of {stepCount} steps done
@@ -822,6 +834,7 @@ export default function TaskViewScreen() {
                 isInstance={isInstance}
                 completed={completedSteps.has(step.stepId)}
                 showCompletionControl={!isSkippedOcc}
+                checkReadOnly={isCompletedOcc}
                 onToggleComplete={() => occKey && toggleOccurrenceStep(occKey, step.stepId)}
                 onOpenDetail={() =>
                   navigation.navigate('StepDetail', {
@@ -1159,6 +1172,10 @@ const styles = StyleSheet.create({
   },
   checkButtonDone: {
     backgroundColor: '#FDE7E7',
+  },
+  // Static check on a completed occurrence — same green as the Completed notice.
+  checkButtonReadOnly: {
+    backgroundColor: '#EAF7EF',
   },
   stepNumberText: {
     ...typography.bodyStrong,
