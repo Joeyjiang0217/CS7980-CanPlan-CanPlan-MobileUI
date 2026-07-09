@@ -1479,6 +1479,7 @@ export default function CalendarScreen() {
           assignmentId: view.assignmentId,
           scheduledDate: view.scheduledDate,
           scheduledTime: view.scheduledTime,
+          scheduledFor: view.scheduledFor,
           instanceId: view.instanceId ?? undefined,
           status: view.status,
         });

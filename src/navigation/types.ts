@@ -58,6 +58,7 @@ export type MainStackParamList = {
     assignmentId?: string;
     scheduledDate?: string;
     scheduledTime?: string;
+    scheduledFor?: string;
     /** Present when the occurrence is already materialized (skips re-starting it). */
     instanceId?: string;
     /** The occurrence's current status, so the runner can gate done/skip/overdue. */

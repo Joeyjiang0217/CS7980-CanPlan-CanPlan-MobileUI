@@ -48,6 +48,27 @@ type TaskViewRoute = RouteProp<MainStackParamList, 'TaskView'>;
 const TEAL = '#3DB8AD';
 const TEAL_LIGHT = '#EBF9F8';
 
+function scheduledOccurrenceMs(
+  scheduledFor: string | undefined,
+  scheduledDate: string | undefined,
+  scheduledTime: string | undefined,
+) {
+  if (scheduledFor) {
+    const fromScheduledFor = new Date(scheduledFor).getTime();
+    if (Number.isFinite(fromScheduledFor)) {
+      return fromScheduledFor;
+    }
+  }
+
+  if (!scheduledDate || !scheduledTime) {
+    return Number.NaN;
+  }
+
+  const normalizedTime =
+    scheduledTime.split(':').length === 2 ? `${scheduledTime}:00` : scheduledTime;
+  return new Date(`${scheduledDate}T${normalizedTime}`).getTime();
+}
+
 // ── Full-screen photo viewer ─────────────────────────────────────────────────
 
 function PhotoViewer({
@@ -115,6 +136,7 @@ interface StepCardProps {
   /** Instance-runner mode: show the done/undo control. */
   isInstance: boolean;
   completed: boolean;
+  showCompletionControl?: boolean;
   onToggleComplete: () => void;
   /** Open the single-step focus view (tapping the title area). */
   onOpenDetail: () => void;
@@ -129,6 +151,7 @@ function StepCard({
   onDeactivate,
   isInstance,
   completed,
+  showCompletionControl = true,
   onToggleComplete,
   onOpenDetail,
 }: StepCardProps) {
@@ -246,7 +269,7 @@ function StepCard({
                 style={styles.stepMedia}
                 contentFit="cover"
               />
-              {isInstance && completed ? (
+              {isInstance && showCompletionControl && completed ? (
                 <View style={styles.completedOverlay}>
                   <View style={styles.completedCheck}>
                     <Ionicons name="checkmark" size={32} color={colors.onPrimary} />
@@ -359,15 +382,15 @@ function StepCard({
           onPress={onOpenDetail}
           style={styles.stepRowMain}
         >
-          <View style={[styles.stepNumber, isInstance && completed ? styles.stepNumberDone : null]}>
-            {isInstance && completed ? (
+          <View style={[styles.stepNumber, isInstance && showCompletionControl && completed ? styles.stepNumberDone : null]}>
+            {isInstance && showCompletionControl && completed ? (
               <Ionicons name="checkmark" size={20} color={colors.onPrimary} />
             ) : (
               <Text style={styles.stepNumberText}>{index + 1}</Text>
             )}
           </View>
           <Text
-            style={[styles.stepTitle, isInstance && completed ? styles.stepTitleDone : null]}
+            style={[styles.stepTitle, isInstance && showCompletionControl && completed ? styles.stepTitleDone : null]}
           >
             {step.text}
           </Text>
@@ -397,7 +420,7 @@ function StepCard({
             color={isPlaying ? colors.onPrimary : colors.primary}
           />
         </Pressable>
-        {isInstance ? (
+        {isInstance && showCompletionControl ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={completed ? 'Mark step not done' : 'Mark step done'}
@@ -472,7 +495,7 @@ export default function TaskViewScreen() {
   const route = useRoute<TaskViewRoute>();
   const insets = useSafeAreaInsets();
   const simpleMode = useSimpleMode();
-  const { taskId, assignmentId, scheduledDate, scheduledTime } = route.params;
+  const { taskId, assignmentId, scheduledDate, scheduledTime, scheduledFor } = route.params;
 
   // Instance "runner" mode: opened from a calendar occurrence, so steps can be
   // checked off and a progress bar is shown.
@@ -498,6 +521,7 @@ export default function TaskViewScreen() {
   // The single step allowed to play at a time (audio recording or TTS).
   const [activeStepId, setActiveStepId] = useState<string>();
   const [skipConfirmVisible, setSkipConfirmVisible] = useState(false);
+  const [unskipConfirmVisible, setUnskipConfirmVisible] = useState(false);
 
   // Completing/skipping the whole occurrence is persisted: the virtual occurrence
   // is materialized (startTaskInstance) and then given its final status. That
@@ -578,6 +602,40 @@ export default function TaskViewScreen() {
     [isInstance, ownerId, ensureInstance, updateStatus, setStepCompletion, stepsQuery.data, occKey, navigation],
   );
 
+  const unskipOccurrence = useCallback(async () => {
+    if (!isInstance || !ownerId) {
+      return;
+    }
+    setFinishError(undefined);
+    const now = new Date();
+    try {
+      const id = await ensureInstance();
+      await updateStatus.mutateAsync({ userId: ownerId, instanceId: id, status: 'IN_PROGRESS' });
+      if (occKey && scheduledDate && scheduledTime) {
+        const scheduledMs = scheduledOccurrenceMs(scheduledFor, scheduledDate, scheduledTime);
+        setOccurrenceStatus(
+          occKey,
+          Number.isFinite(scheduledMs) && now.getTime() > scheduledMs
+            ? 'OVERDUE'
+            : 'IN_PROGRESS',
+        );
+      }
+      navigation.goBack();
+    } catch (error) {
+      setFinishError(error instanceof Error ? error.message : 'Could not un-skip. Please try again.');
+    }
+  }, [
+    isInstance,
+    ownerId,
+    ensureInstance,
+    updateStatus,
+    occKey,
+    scheduledDate,
+    scheduledTime,
+    scheduledFor,
+    navigation,
+  ]);
+
 
   const steps = useMemo(
     () =>
@@ -633,6 +691,38 @@ export default function TaskViewScreen() {
   }
 
   const task = taskQuery.data;
+  const unskipControl = (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ disabled: isFinishing }}
+        accessibilityLabel="Un-skip this task"
+        disabled={isFinishing}
+        onPress={() => setUnskipConfirmVisible(true)}
+        style={({ pressed }) => [
+          styles.statusNotice,
+          styles.statusNoticeUnskip,
+          pressed ? styles.pressed : null,
+          isFinishing ? styles.statusNoticeDisabled : null,
+        ]}
+      >
+        <Ionicons
+          name="arrow-undo"
+          size={20}
+          color={isFinishing ? colors.disabled : colors.onPrimary}
+        />
+        <Text
+          style={[
+            styles.statusNoticeText,
+            { color: isFinishing ? colors.disabled : colors.onPrimary },
+          ]}
+        >
+          {isFinishing ? 'Saving…' : 'Un-skip'}
+        </Text>
+      </Pressable>
+      <View style={styles.statusHintSpacer} />
+    </View>
+  );
 
   return (
     <View style={styles.root}>
@@ -678,7 +768,7 @@ export default function TaskViewScreen() {
         )}
       </View>
 
-      {isInstance && stepCount > 0 ? (
+      {isInstance && stepCount > 0 && !isSkippedOcc ? (
         <View style={styles.progressWrap}>
           <Text style={styles.progressLabel}>
             {doneCount} of {stepCount} steps done
@@ -710,6 +800,8 @@ export default function TaskViewScreen() {
           </View>
         ) : null}
 
+        {isSkippedOcc ? unskipControl : null}
+
         {stepCount === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="list-outline" size={40} color={colors.primary} />
@@ -729,6 +821,7 @@ export default function TaskViewScreen() {
                 onDeactivate={deactivateStep}
                 isInstance={isInstance}
                 completed={completedSteps.has(step.stepId)}
+                showCompletionControl={!isSkippedOcc}
                 onToggleComplete={() => occKey && toggleOccurrenceStep(occKey, step.stepId)}
                 onOpenDetail={() =>
                   navigation.navigate('StepDetail', {
@@ -751,23 +844,7 @@ export default function TaskViewScreen() {
               <Ionicons name="checkmark-circle" size={22} color={colors.success} />
               <Text style={[styles.statusNoticeText, { color: colors.success }]}>Completed</Text>
             </View>
-          ) : isSkippedOcc ? (
-            // Un-skip needs a backend "reopen" mutation that doesn't exist yet
-            // (the API rejects any status change on a SKIPPED instance), so the
-            // control is shown disabled rather than firing a guaranteed error.
-            <View>
-              <View
-                accessibilityRole="button"
-                accessibilityState={{ disabled: true }}
-                accessibilityLabel="Un-skip (not available yet)"
-                style={[styles.statusNotice, styles.statusNoticeDisabled]}
-              >
-                <Ionicons name="arrow-undo" size={20} color={colors.disabled} />
-                <Text style={[styles.statusNoticeText, { color: colors.disabled }]}>Un-skip</Text>
-              </View>
-              <Text style={styles.statusHint}>Un-skip isn’t available yet.</Text>
-            </View>
-          ) : allDone ? (
+          ) : isSkippedOcc ? null : allDone ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Great job, mark this task done"
@@ -805,6 +882,18 @@ export default function TaskViewScreen() {
           void finishOccurrence('SKIPPED');
         }}
         onCancel={() => setSkipConfirmVisible(false)}
+      />
+      <ConfirmDialog
+        visible={unskipConfirmVisible}
+        title="Un-skip this task?"
+        message="This task will return to To Do if it is before the scheduled time, or Overdue if it is after."
+        confirmLabel="Un-skip"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          setUnskipConfirmVisible(false);
+          void unskipOccurrence();
+        }}
+        onCancel={() => setUnskipConfirmVisible(false)}
       />
     </View>
   );
@@ -1171,6 +1260,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#EAF7EF',
     borderColor: '#BFE6CE',
   },
+  statusNoticeUnskip: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primaryDark,
+  },
   statusNoticeDisabled: {
     backgroundColor: colors.surfaceWarm,
     borderColor: colors.border,
@@ -1179,11 +1272,8 @@ const styles = StyleSheet.create({
     ...typography.button,
     color: colors.textMuted,
   },
-  statusHint: {
-    ...typography.caption,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: spacing.sm,
+  statusHintSpacer: {
+    height: spacing.lg,
   },
   pressed: {
     opacity: 0.72,

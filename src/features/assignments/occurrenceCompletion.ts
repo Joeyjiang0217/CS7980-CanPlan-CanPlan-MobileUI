@@ -8,8 +8,13 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 
+import type { TaskInstanceStatus } from '../../shared/api/canplanTypes';
+
 /** A user-applied status for a whole occurrence (UI-only, like the steps). */
-export type OccurrenceStatus = 'COMPLETED' | 'SKIPPED';
+export type OccurrenceStatus = Extract<
+  TaskInstanceStatus,
+  'IN_PROGRESS' | 'OVERDUE' | 'COMPLETED' | 'SKIPPED'
+>;
 
 const EMPTY: ReadonlySet<string> = new Set();
 const store = new Map<string, ReadonlySet<string>>();
@@ -58,13 +63,17 @@ export function useCompletedSteps(key: string): ReadonlySet<string> {
 export function setOccurrenceStatus(
   key: string,
   status: OccurrenceStatus,
-  resolvedAt = new Date().toISOString(),
+  resolvedAt?: string,
 ) {
   const next = new Map(statusSnapshot);
   next.set(key, status);
   statusSnapshot = next;
   const nextResolvedAt = new Map(resolvedAtSnapshot);
-  nextResolvedAt.set(key, resolvedAt);
+  if (status === 'COMPLETED' || status === 'SKIPPED') {
+    nextResolvedAt.set(key, resolvedAt ?? new Date().toISOString());
+  } else {
+    nextResolvedAt.delete(key);
+  }
   resolvedAtSnapshot = nextResolvedAt;
   emit();
 }
