@@ -39,7 +39,7 @@ export default function AllTasksScreen() {
   const ownerTasksQuery = useTasksByOwner(categoryMode ? '' : ownerId);
   const categoryTasksQuery = useTasksByCategory(ownerId, categoryId ?? '');
   const tasksQuery = categoryMode ? categoryTasksQuery : ownerTasksQuery;
-  const categoriesQuery = useMyCategories(Boolean(ownerId));
+  const categoriesQuery = useMyCategories(Boolean(ownerId), 50, ownerId);
 
   useEffect(() => {
     let mounted = true;

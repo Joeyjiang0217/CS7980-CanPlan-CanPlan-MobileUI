@@ -22,7 +22,7 @@ export default function SelectTaskScreen() {
   const [ownerId, setOwnerId] = useState('');
   const [identityError, setIdentityError] = useState<string>();
   const tasksQuery = useTasksByOwner(ownerId);
-  const categoriesQuery = useMyCategories(Boolean(ownerId));
+  const categoriesQuery = useMyCategories(Boolean(ownerId), 50, ownerId);
 
   useEffect(() => {
     let mounted = true;

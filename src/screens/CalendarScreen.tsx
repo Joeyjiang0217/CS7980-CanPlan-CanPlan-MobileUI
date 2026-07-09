@@ -24,6 +24,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { getTaskInstanceViews } from '../features/assignments/api/assignmentApi';
 import {
   useAssignmentsForUser,
+  useTaskInstances,
   useTaskInstanceViews,
 } from '../features/assignments/hooks/useAssignments';
 import {
@@ -34,6 +35,7 @@ import {
 import {
   occurrenceKey,
   useCompletedSteps,
+  useOccurrenceResolvedAt,
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
 import { describeRepeat } from '../features/assignments/repeat';
@@ -97,6 +99,15 @@ function bucketOf(status: TaskInstanceStatus): StatusKey | null {
     default:
       return null;
   }
+}
+
+function isResolvedAfterScheduled(view: TaskInstanceView, resolvedAt?: string | null) {
+  if (!resolvedAt) {
+    return false;
+  }
+  const resolvedMs = new Date(resolvedAt).getTime();
+  const scheduledMs = new Date(view.scheduledFor).getTime();
+  return Number.isFinite(resolvedMs) && Number.isFinite(scheduledMs) && resolvedMs > scheduledMs;
 }
 
 // ── Date helpers (local, not UTC) ──────────────────────────────────────────────
@@ -303,6 +314,7 @@ function DayThumbGrid({
 function AssignmentCard({
   view,
   bucket,
+  wasOverdue,
   coverAssetId,
   coverUri,
   coverPreviewUri,
@@ -314,6 +326,7 @@ function AssignmentCard({
 }: {
   view: TaskInstanceView;
   bucket: StatusKey;
+  wasOverdue: boolean;
   coverAssetId?: string | null;
   coverUri?: string | null;
   coverPreviewUri?: string | null;
@@ -373,13 +386,6 @@ function AssignmentCard({
       </Text>
     </View>
   );
-
-  // Once an occurrence is resolved we lose its OVERDUE status, so infer "was
-  // overdue" from a done/skipped occurrence whose scheduled slot has passed —
-  // and keep an Overdue badge to the right of the Done/Skipped one.
-  const wasOverdue =
-    (bucket === 'done' || bucket === 'skipped') &&
-    new Date(view.scheduledFor).getTime() < Date.now();
 
   const statusTags = [
     <View key={bucket} style={[styles.statusTag, { backgroundColor: STATUS_ACCENT[bucket] }]}>
@@ -1057,7 +1063,22 @@ function DayAssignmentsPage({
 }) {
   const iso = toISODate(date);
   const viewsQuery = useTaskInstanceViews(ownerId, iso, iso);
+  const instancesQuery = useTaskInstances(iso, iso);
   const statusOverrides = useOccurrenceStatuses();
+  const resolvedAtOverrides = useOccurrenceResolvedAt();
+
+  const instanceResolvedAtByKey = useMemo(() => {
+    const map = new Map<string, string | null | undefined>();
+    for (const page of instancesQuery.data?.pages ?? []) {
+      for (const instance of page.items) {
+        map.set(
+          occurrenceKey(instance.assignmentId, instance.scheduledDate, instance.scheduledTime),
+          instance.completedAt ?? instance.skippedAt,
+        );
+      }
+    }
+    return map;
+  }, [instancesQuery.data]);
 
   const views = useMemo(() => {
     const result: TaskInstanceView[] = [];
@@ -1133,9 +1154,12 @@ function DayAssignmentsPage({
       }
 
       const view = item.view;
-      const override = statusOverrides.get(
-        occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
-      );
+      const key = occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime);
+      const override = statusOverrides.get(key);
+      const resolvedAt = resolvedAtOverrides.get(key) ?? instanceResolvedAtByKey.get(key);
+      const wasOverdue =
+        (activeStatus === 'done' || activeStatus === 'skipped') &&
+        isResolvedAfterScheduled(view, resolvedAt);
       const assignment = assignmentById.get(view.assignmentId);
       const isRecurring = assignment?.scheduleType === 'RECURRING';
       const activeDate = activeDates.get(view.assignmentId);
@@ -1160,6 +1184,7 @@ function DayAssignmentsPage({
         <AssignmentCard
           view={view}
           bucket={activeStatus}
+          wasOverdue={wasOverdue}
           coverAssetId={coverByTask.get(view.taskId)}
           coverUri={coverThumbnailUriByTask.get(view.taskId) ?? null}
           coverPreviewUri={coverPreviewUriByTask.get(view.taskId) ?? null}
@@ -1178,7 +1203,9 @@ function DayAssignmentsPage({
       coverByTask,
       coverThumbnailUriByTask,
       coverPreviewUriByTask,
+      instanceResolvedAtByKey,
       onOpen,
+      resolvedAtOverrides,
       statusOverrides,
       todayISO,
     ],
@@ -1337,13 +1364,6 @@ export default function CalendarScreen() {
     },
     [markDayPageMounted],
   );
-
-  useEffect(() => {
-    console.log('[Calendar] mounted day pages', {
-      storeKey: mountedDaysKey,
-      dates: [...mountedDayPageKeys].sort(),
-    });
-  }, [mountedDayPageKeys, mountedDaysKey]);
 
   const scheduleSelectedCommit = useCallback((target: Date) => {
     if (dayCommitFrameRef.current) {

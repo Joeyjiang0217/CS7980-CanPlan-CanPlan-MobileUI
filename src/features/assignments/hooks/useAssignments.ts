@@ -5,8 +5,10 @@ import type {
   CreateTaskAssignmentInput,
   DeleteTaskAssignmentInput,
   EndTaskAssignmentInput,
+  PauseTaskInstanceTimerInput,
   SetTaskInstanceStepCompletionInput,
   StartTaskInstanceInput,
+  StartTaskInstanceStepInput,
   UpdateTaskInstanceStatusInput,
 } from '../../../shared/api/canplanTypes';
 import { queryKeys } from '../../../shared/query/queryKeys';
@@ -15,12 +17,16 @@ import {
   createTaskAssignment,
   deleteTaskAssignment,
   endTaskAssignment,
+  getTaskInstance,
   getTaskInstanceViews,
+  listTaskInstances,
   listMyAssignments,
   listTaskAssignmentsForUser,
   listTaskInstanceSteps,
+  pauseTaskInstanceTimer,
   setTaskInstanceStepCompletion,
   startTaskInstance,
+  startTaskInstanceStep,
   updateTaskInstanceStatus,
 } from '../api/assignmentApi';
 
@@ -70,6 +76,27 @@ export function useInstanceSteps(userId: string, instanceId: string, limit = 50)
   });
 }
 
+/** Reads one materialized task instance owned by the signed-in user. */
+export function useTaskInstance(instanceId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.assignments.instance(instanceId),
+    queryFn: () => getTaskInstance(instanceId),
+    enabled: enabled && Boolean(instanceId),
+  });
+}
+
+/** Paginated real/materialized task instances for the signed-in user. */
+export function useTaskInstances(startDate: string, endDate: string, limit = 50) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.assignments.instances(startDate, endDate, limit),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      listTaskInstances(startDate, endDate, { limit, nextToken: pageParam }),
+    getNextPageParam: (lastPage) => lastPage.nextToken ?? undefined,
+    enabled: Boolean(startDate) && Boolean(endDate),
+  });
+}
+
 function useAssignmentMutation<TInput, TResult>(
   mutationFn: (input: TInput) => Promise<TResult>,
 ) {
@@ -104,6 +131,18 @@ export function useUpdateInstanceStatus() {
 export function useSetInstanceStepCompletion() {
   return useAssignmentMutation((input: SetTaskInstanceStepCompletionInput) =>
     setTaskInstanceStepCompletion(input),
+  );
+}
+
+export function useStartTaskInstanceStep() {
+  return useAssignmentMutation((input: StartTaskInstanceStepInput) =>
+    startTaskInstanceStep(input),
+  );
+}
+
+export function usePauseTaskInstanceTimer() {
+  return useAssignmentMutation((input: PauseTaskInstanceTimerInput) =>
+    pauseTaskInstanceTimer(input),
   );
 }
 

@@ -14,6 +14,7 @@ export type OccurrenceStatus = 'COMPLETED' | 'SKIPPED';
 const EMPTY: ReadonlySet<string> = new Set();
 const store = new Map<string, ReadonlySet<string>>();
 let statusSnapshot: ReadonlyMap<string, OccurrenceStatus> = new Map();
+let resolvedAtSnapshot: ReadonlyMap<string, string> = new Map();
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -54,10 +55,17 @@ export function useCompletedSteps(key: string): ReadonlySet<string> {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-export function setOccurrenceStatus(key: string, status: OccurrenceStatus) {
+export function setOccurrenceStatus(
+  key: string,
+  status: OccurrenceStatus,
+  resolvedAt = new Date().toISOString(),
+) {
   const next = new Map(statusSnapshot);
   next.set(key, status);
   statusSnapshot = next;
+  const nextResolvedAt = new Map(resolvedAtSnapshot);
+  nextResolvedAt.set(key, resolvedAt);
+  resolvedAtSnapshot = nextResolvedAt;
   emit();
 }
 
@@ -69,6 +77,9 @@ export function clearOccurrenceStatus(key: string) {
   const next = new Map(statusSnapshot);
   next.delete(key);
   statusSnapshot = next;
+  const nextResolvedAt = new Map(resolvedAtSnapshot);
+  nextResolvedAt.delete(key);
+  resolvedAtSnapshot = nextResolvedAt;
   emit();
 }
 
@@ -78,5 +89,14 @@ export function useOccurrenceStatuses(): ReadonlyMap<string, OccurrenceStatus> {
     subscribe,
     () => statusSnapshot,
     () => statusSnapshot,
+  );
+}
+
+/** Subscribe to UI-local completion/skip timestamps keyed by occurrence. */
+export function useOccurrenceResolvedAt(): ReadonlyMap<string, string> {
+  return useSyncExternalStore(
+    subscribe,
+    () => resolvedAtSnapshot,
+    () => resolvedAtSnapshot,
   );
 }

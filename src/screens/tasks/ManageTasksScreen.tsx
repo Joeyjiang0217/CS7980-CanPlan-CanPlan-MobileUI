@@ -77,7 +77,7 @@ export default function ManageTasksScreen() {
   const [orderedTasks, setOrderedTasks] = useState<Task[]>([]);
   const latestTaskOrderRef = useRef<string[]>([]);
   const tasksQuery = useTasksByOwner(ownerId);
-  const categoriesQuery = useMyCategories(Boolean(ownerId));
+  const categoriesQuery = useMyCategories(Boolean(ownerId), 50, ownerId);
   const deleteTaskMutation = useDeleteTask();
   const updateTaskMutation = useUpdateTask();
 

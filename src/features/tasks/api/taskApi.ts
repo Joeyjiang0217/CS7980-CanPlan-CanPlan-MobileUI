@@ -14,6 +14,7 @@ import type {
   PageInput,
   ReorderTaskStepsInput,
   UpdateTaskInput,
+  UpdateTaskOrderInput,
   UpdateTaskStepInput,
 } from '../../../shared/api/canplanTypes';
 
@@ -69,4 +70,8 @@ export function deleteTaskStep(input: DeleteTaskStepInput) {
 
 export function reorderTaskSteps(input: ReorderTaskStepsInput) {
   return canPlanApi.reorderTaskSteps(input);
+}
+
+export function updateTaskOrder(input: UpdateTaskOrderInput) {
+  return canPlanApi.updateTaskOrder(input);
 }

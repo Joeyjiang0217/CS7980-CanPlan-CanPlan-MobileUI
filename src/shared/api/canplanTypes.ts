@@ -15,6 +15,9 @@ export type JsonValue =
 export type UserRole = 'PRIMARY_USER' | 'SUPPORT_PERSON' | 'ORG_ADMIN';
 export type SupportLinkStatus = 'PENDING' | 'ACTIVE' | 'REVOKED';
 export type MediaType = 'IMAGE' | 'AUDIO' | 'VIDEO';
+export type AdminBaseRole = 'PRIMARY_USER' | 'SUPPORT_PERSON' | 'ORG_ADMIN';
+export type AiTaskGroundingMode = 'GROUNDED_ONLY' | 'ALLOW_UNGROUNDED_FALLBACK';
+export type AiTaskGenerationSource = 'CORPUS' | 'UNGROUNDED_AI';
 
 /** How a TaskAssignment recurs: a single occurrence, or a recurrence rule. */
 export type TaskAssignmentScheduleType = 'ONE_TIME' | 'RECURRING';
@@ -53,9 +56,15 @@ export interface SupportLink {
   primaryUserId: string;
   userId: string;
   status: SupportLinkStatus;
-  permissions?: JsonValue | null;
   createdAt: string;
   updatedAt?: string | null;
+}
+
+export interface Organization {
+  organizationId: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Category {
@@ -139,6 +148,10 @@ export interface TaskInstance {
   completedAt?: string | null;
   skippedAt?: string | null;
   cancelledAt?: string | null;
+  activeStepId?: string | null;
+  activeStepStartedAt?: string | null;
+  activeDurationSeconds: number;
+  elapsedSeconds?: number | null;
   isException?: boolean | null;
   createdAt: string;
   updatedAt?: string | null;
@@ -174,8 +187,17 @@ export interface TaskInstanceStep {
   text: string;
   completed: boolean;
   completedAt?: string | null;
+  firstStartedAt?: string | null;
+  lastStartedAt?: string | null;
+  activeDurationSeconds: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TaskInstanceTimingResult {
+  instance: TaskInstance;
+  activeStep?: TaskInstanceStep | null;
+  previousStep?: TaskInstanceStep | null;
 }
 
 export interface MediaAsset {
@@ -222,6 +244,74 @@ export interface TaskStepsResponse {
   outputTokens?: number | null;
 }
 
+export interface GeneratedAiTaskStep {
+  text: string;
+  citations: Citation[];
+}
+
+export interface GeneratedAiTask {
+  title: string;
+  steps: GeneratedAiTaskStep[];
+  grounded: boolean;
+  source: AiTaskGenerationSource;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+}
+
+export interface Report {
+  reportId: string;
+  scope?: JsonValue | null;
+  dateRange?: JsonValue | null;
+  s3Key?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  narrative?: string | null;
+  stats?: JsonValue | null;
+}
+
+export interface GeneratedReport {
+  draftToken: string;
+  scope?: JsonValue | null;
+  dateRange?: JsonValue | null;
+  generatedAt: string;
+  narrative: string;
+  stats?: JsonValue | null;
+}
+
+export interface AdminUserResult {
+  userId: string;
+  email?: string | null;
+  groups: string[];
+  profile?: UserProfile | null;
+}
+
+export interface AdminDeleteUserResult {
+  userId: string;
+  deletedTasks: number;
+  deletedUserItems: number;
+  deletedSupportLinks: number;
+  deletedCognitoUser: boolean;
+}
+
+export interface AdminUserData {
+  userId: string;
+  profile?: UserProfile | null;
+  tasks: Task[];
+  categories: Category[];
+  taskAssignments: TaskAssignment[];
+  supportLinks: SupportLink[];
+}
+
+export interface AdminDeleteOrganizationResult {
+  organization: Organization;
+  removedUsers: number;
+}
+
+export interface TaskInstanceLookupResult {
+  instanceId: string;
+  item?: TaskInstance | null;
+}
+
 export interface Connection<T> {
   items: T[];
   nextToken?: string | null;
@@ -245,22 +335,26 @@ export interface UpdateMyUserProfileInput {
    * `null` clears the field; omitted leaves it unchanged.
    */
   accessibilitySettings?: JsonValue | null;
+  organizationId?: string | null;
 }
 
-export interface CreateSupportLinkInput {
-  supporterId: string;
+export interface SelectPrimaryUserInput {
   primaryUserId: string;
-  status?: SupportLinkStatus | null;
-  permissions?: JsonValue;
+}
+
+export interface UnselectPrimaryUserInput {
+  primaryUserId: string;
 }
 
 export interface CreateCategoryInput {
+  userId?: string | null;
   name: string;
   color?: string | null;
   sortOrder?: number | null;
 }
 
 export interface UpdateCategoryInput {
+  userId?: string | null;
   categoryId: string;
   /** Omitted ⇒ unchanged. Rejected for the default category and for null. */
   name?: string;
@@ -271,6 +365,7 @@ export interface UpdateCategoryInput {
 }
 
 export interface DeleteCategoryInput {
+  userId?: string | null;
   categoryId: string;
 }
 
@@ -280,6 +375,7 @@ export interface CreateTaskStepNestedInput {
 }
 
 export interface CreateTaskInput {
+  userId?: string | null;
   title: string;
   categoryId?: string | null;
   description?: string | null;
@@ -331,6 +427,16 @@ export interface ReorderTaskStepsInput {
   steps: ReorderTaskStepInput[];
 }
 
+export interface TaskOrderInput {
+  taskId: string;
+  order: number;
+}
+
+export interface UpdateTaskOrderInput {
+  userId?: string | null;
+  tasks: TaskOrderInput[];
+}
+
 export interface CreateTaskAssignmentInput {
   taskId: string;
   userId: string;
@@ -366,6 +472,17 @@ export interface SetTaskInstanceStepCompletionInput {
   completed: boolean;
 }
 
+export interface StartTaskInstanceStepInput {
+  userId: string;
+  instanceId: string;
+  stepId: string;
+}
+
+export interface PauseTaskInstanceTimerInput {
+  userId: string;
+  instanceId: string;
+}
+
 export interface CancelTaskInstanceInput {
   userId: string;
   assignmentId: string;
@@ -389,7 +506,7 @@ export interface CreateMediaAssetInput {
   s3Key: string;
   type: MediaType;
   mimeType: string;
-  ownerId: string;
+  ownerId?: string | null;
   size?: number | null;
 }
 
@@ -416,4 +533,65 @@ export interface GenerateTaskStepsInput {
     role?: string | null;
     organizationId?: string | null;
   } | null;
+}
+
+export interface CreateAiTaskInput {
+  query: string;
+  groundingMode?: AiTaskGroundingMode | null;
+  stepCount?: number | null;
+}
+
+export interface GenerateReportInput {
+  userId: string;
+  from: string;
+  to: string;
+}
+
+export interface SaveReportInput {
+  draftToken: string;
+  scope: JsonValue;
+  dateRange: JsonValue;
+  generatedAt: string;
+  narrative: string;
+  stats: JsonValue;
+}
+
+export interface InviteUserInput {
+  email: string;
+  displayName?: string | null;
+  organizationId?: string | null;
+}
+
+export interface SetUserBaseRoleInput {
+  userId: string;
+  role: AdminBaseRole;
+}
+
+export interface SetSystemAdminInput {
+  userId: string;
+  enabled: boolean;
+}
+
+export interface AdminDeleteUserInput {
+  userId: string;
+  deleteCognitoUser?: boolean | null;
+  disableFirst?: boolean | null;
+}
+
+export interface CreateOrganizationInput {
+  name: string;
+}
+
+export interface UpdateOrganizationInput {
+  organizationId: string;
+  name: string;
+}
+
+export interface DeleteOrganizationInput {
+  organizationId: string;
+}
+
+export interface AdminSetUserOrganizationInput {
+  userId: string;
+  organizationId?: string | null;
 }

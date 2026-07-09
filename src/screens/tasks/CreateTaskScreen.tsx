@@ -279,7 +279,7 @@ export default function CreateTaskScreen() {
   const [busyAction, setBusyAction] = useState<string>();
   const [inlineError, setInlineError] = useState<string>();
   const [hydratedTaskId, setHydratedTaskId] = useState<string>();
-  const categoriesQuery = useMyCategories(Boolean(categoryOwnerId));
+  const categoriesQuery = useMyCategories(Boolean(categoryOwnerId), 50, categoryOwnerId);
   const taskOperationRef = useRef<string | undefined>(undefined);
   const draftCreationPromiseRef = useRef<Promise<string> | undefined>(undefined);
 
@@ -326,6 +326,7 @@ export default function CreateTaskScreen() {
     setSavedDescription(task.description ?? '');
     setCategoryId(task.categoryId);
     setSavedCategoryId(task.categoryId);
+    setCategoryOwnerId(task.ownerId);
     setHydratedTaskId(task.taskId);
   }, [existingTaskQuery.data, hydratedTaskId]);
 

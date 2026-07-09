@@ -10,42 +10,67 @@ import { GraphQLRequestError } from './errors';
 import { graphqlRequest } from './graphqlClient';
 import * as operations from './canplanOperations';
 import type {
+  AdminDeleteOrganizationResult,
+  AdminDeleteUserInput,
+  AdminDeleteUserResult,
+  AdminSetUserOrganizationInput,
+  AdminUserData,
+  AdminUserResult,
   CancelTaskInstanceInput,
   Category,
   Connection,
+  CreateAiTaskInput,
   CreateCategoryInput,
   CreateMediaAssetInput,
   CreateMediaUploadUrlInput,
   CreateMyUserProfileInput,
-  CreateSupportLinkInput,
+  CreateOrganizationInput,
   CreateTaskAssignmentInput,
   CreateTaskCoverImageUploadUrlInput,
   CreateTaskInput,
   CreateTaskStepInput,
   DeleteCategoryInput,
+  DeleteOrganizationInput,
   DeleteMediaAssetInput,
   DeleteTaskAssignmentInput,
   DeleteTaskStepInput,
   EndTaskAssignmentInput,
+  GenerateReportInput,
   GenerateTaskStepsInput,
+  GeneratedAiTask,
+  GeneratedReport,
+  InviteUserInput,
   JsonValue,
   MediaAsset,
   MediaDownloadTarget,
   MediaUploadTarget,
+  Organization,
   PageInput,
+  PauseTaskInstanceTimerInput,
+  Report,
   ReorderTaskStepsInput,
+  SaveReportInput,
+  SelectPrimaryUserInput,
   SetTaskInstanceStepCompletionInput,
+  SetSystemAdminInput,
+  SetUserBaseRoleInput,
   StartTaskInstanceInput,
+  StartTaskInstanceStepInput,
   SupportLink,
   Task,
   TaskAssignment,
   TaskInstance,
+  TaskInstanceLookupResult,
   TaskInstanceStep,
+  TaskInstanceTimingResult,
   TaskInstanceView,
   TaskStep,
   TaskStepsResponse,
+  UnselectPrimaryUserInput,
   UpdateCategoryInput,
+  UpdateOrganizationInput,
   UpdateMyUserProfileInput,
+  UpdateTaskOrderInput,
   UpdateTaskInput,
   UpdateTaskInstanceStatusInput,
   UpdateTaskStepInput,
@@ -56,8 +81,24 @@ type RawUserProfile = Omit<UserProfile, 'accessibilitySettings'> & {
   accessibilitySettings?: string | null;
 };
 
-type RawSupportLink = Omit<SupportLink, 'permissions'> & {
-  permissions?: string | null;
+type RawReport = Omit<Report, 'scope' | 'dateRange' | 'stats'> & {
+  scope?: string | null;
+  dateRange?: string | null;
+  stats?: string | null;
+};
+
+type RawGeneratedReport = Omit<GeneratedReport, 'scope' | 'dateRange' | 'stats'> & {
+  scope?: string | null;
+  dateRange?: string | null;
+  stats?: string | null;
+};
+
+type RawAdminUserResult = Omit<AdminUserResult, 'profile'> & {
+  profile?: RawUserProfile | null;
+};
+
+type RawAdminUserData = Omit<AdminUserData, 'profile'> & {
+  profile?: RawUserProfile | null;
 };
 
 function parseAwsJson(
@@ -91,10 +132,35 @@ function mapUserProfile(profile: RawUserProfile): UserProfile {
   };
 }
 
-function mapSupportLink(link: RawSupportLink): SupportLink {
+function mapReport(report: RawReport): Report {
   return {
-    ...link,
-    permissions: parseAwsJson(link.permissions, 'SupportLink.permissions'),
+    ...report,
+    scope: parseAwsJson(report.scope, 'Report.scope'),
+    dateRange: parseAwsJson(report.dateRange, 'Report.dateRange'),
+    stats: parseAwsJson(report.stats, 'Report.stats'),
+  };
+}
+
+function mapGeneratedReport(report: RawGeneratedReport): GeneratedReport {
+  return {
+    ...report,
+    scope: parseAwsJson(report.scope, 'GeneratedReport.scope'),
+    dateRange: parseAwsJson(report.dateRange, 'GeneratedReport.dateRange'),
+    stats: parseAwsJson(report.stats, 'GeneratedReport.stats'),
+  };
+}
+
+function mapAdminUserResult(result: RawAdminUserResult): AdminUserResult {
+  return {
+    ...result,
+    profile: result.profile ? mapUserProfile(result.profile) : result.profile,
+  };
+}
+
+function mapAdminUserData(data: RawAdminUserData): AdminUserData {
+  return {
+    ...data,
+    profile: data.profile ? mapUserProfile(data.profile) : data.profile,
   };
 }
 
@@ -132,33 +198,34 @@ export const canPlanApi = {
     return data.getUserProfile ? mapUserProfile(data.getUserProfile) : null;
   },
 
-  async listUsersByOrganization(
-    organizationId: string,
+  async listMyOrganizationUsers(
     page: PageInput = {},
   ): Promise<Connection<UserProfile>> {
     const data = await graphqlRequest<
-      { listUsersByOrganization: Connection<RawUserProfile> },
-      { organizationId: string } & PageInput
-    >(operations.LIST_USERS_BY_ORGANIZATION, { organizationId, ...pageVariables(page) });
-    return mapConnection(data.listUsersByOrganization, mapUserProfile);
+      { listMyOrganizationUsers: Connection<RawUserProfile> },
+      PageInput
+    >(operations.LIST_MY_ORGANIZATION_USERS, pageVariables(page));
+    return mapConnection(data.listMyOrganizationUsers, mapUserProfile);
   },
 
-  async listPrimaryUsersBySupporter(
-    supporterId: string,
+  async listMySupportList(
     page: PageInput = {},
   ): Promise<Connection<SupportLink>> {
     const data = await graphqlRequest<
-      { listPrimaryUsersBySupporter: Connection<RawSupportLink> },
-      { supporterId: string } & PageInput
-    >(operations.LIST_PRIMARY_USERS_BY_SUPPORTER, { supporterId, ...pageVariables(page) });
-    return mapConnection(data.listPrimaryUsersBySupporter, mapSupportLink);
+      { listMySupportList: Connection<SupportLink> },
+      PageInput
+    >(operations.LIST_MY_SUPPORT_LIST, pageVariables(page));
+    return data.listMySupportList;
   },
 
-  async listMyCategories(page: PageInput = {}): Promise<Connection<Category>> {
+  async listMyCategories(
+    page: PageInput = {},
+    userId?: string | null,
+  ): Promise<Connection<Category>> {
     const data = await graphqlRequest<
       { listMyCategories: Connection<Category> },
-      PageInput
-    >(operations.LIST_MY_CATEGORIES, pageVariables(page));
+      { userId?: string | null } & PageInput
+    >(operations.LIST_MY_CATEGORIES, { userId, ...pageVariables(page) });
     return data.listMyCategories;
   },
 
@@ -245,6 +312,34 @@ export const canPlanApi = {
     return data.listTaskInstanceSteps;
   },
 
+  async getTaskInstance(instanceId: string): Promise<TaskInstance | null> {
+    const data = await graphqlRequest<
+      { getTaskInstance: TaskInstance | null },
+      { instanceId: string }
+    >(operations.GET_TASK_INSTANCE, { instanceId });
+    return data.getTaskInstance;
+  },
+
+  async listTaskInstances(
+    startDate: string,
+    endDate: string,
+    page: PageInput = {},
+  ): Promise<Connection<TaskInstance>> {
+    const data = await graphqlRequest<
+      { listTaskInstances: Connection<TaskInstance> },
+      { startDate: string; endDate: string } & PageInput
+    >(operations.LIST_TASK_INSTANCES, { startDate, endDate, ...pageVariables(page) });
+    return data.listTaskInstances;
+  },
+
+  async batchGetTaskInstances(instanceIds: string[]): Promise<TaskInstanceLookupResult[]> {
+    const data = await graphqlRequest<
+      { batchGetTaskInstances: TaskInstanceLookupResult[] },
+      { instanceIds: string[] }
+    >(operations.BATCH_GET_TASK_INSTANCES, { instanceIds });
+    return data.batchGetTaskInstances;
+  },
+
   async getMediaDownloadUrl(
     taskId: string,
     assetId: string,
@@ -283,6 +378,55 @@ export const canPlanApi = {
     return data.listAllTasks;
   },
 
+  async adminGetUserData(userId: string): Promise<AdminUserData> {
+    const data = await graphqlRequest<
+      { adminGetUserData: RawAdminUserData },
+      { userId: string }
+    >(operations.ADMIN_GET_USER_DATA, { userId });
+    return mapAdminUserData(data.adminGetUserData);
+  },
+
+  async listAllOrganizations(page: PageInput = {}): Promise<Connection<Organization>> {
+    const data = await graphqlRequest<
+      { listAllOrganizations: Connection<Organization> },
+      PageInput
+    >(operations.LIST_ALL_ORGANIZATIONS, pageVariables(page));
+    return data.listAllOrganizations;
+  },
+
+  async adminListOrganizationUsers(
+    organizationId: string,
+    page: PageInput = {},
+  ): Promise<Connection<UserProfile>> {
+    const data = await graphqlRequest<
+      { adminListOrganizationUsers: Connection<RawUserProfile> },
+      { organizationId: string } & PageInput
+    >(
+      operations.ADMIN_LIST_ORGANIZATION_USERS,
+      { organizationId, ...pageVariables(page) },
+    );
+    return mapConnection(data.adminListOrganizationUsers, mapUserProfile);
+  },
+
+  async listReports(userId: string, page: PageInput = {}): Promise<Connection<Report>> {
+    const data = await graphqlRequest<
+      { listReports: Connection<RawReport> },
+      { userId: string } & PageInput
+    >(operations.LIST_REPORTS, { userId, ...pageVariables(page) });
+    return mapConnection(data.listReports, mapReport);
+  },
+
+  async getReportDownloadUrl(
+    userId: string,
+    reportId: string,
+  ): Promise<MediaDownloadTarget> {
+    const data = await graphqlRequest<
+      { getReportDownloadUrl: MediaDownloadTarget },
+      { userId: string; reportId: string }
+    >(operations.GET_REPORT_DOWNLOAD_URL, { userId, reportId });
+    return data.getReportDownloadUrl;
+  },
+
   async createUserProfile(input: CreateMyUserProfileInput): Promise<UserProfile | null> {
     const data = await graphqlRequest<
       { createUserProfile: RawUserProfile | null },
@@ -316,17 +460,20 @@ export const canPlanApi = {
     return mapUserProfile(data.updateMyUserProfile);
   },
 
-  async createSupportLink(input: CreateSupportLinkInput): Promise<SupportLink | null> {
+  async selectPrimaryUser(input: SelectPrimaryUserInput): Promise<SupportLink> {
     const data = await graphqlRequest<
-      { createSupportLink: RawSupportLink | null },
-      { input: Omit<CreateSupportLinkInput, 'permissions'> & { permissions?: string } }
-    >(operations.CREATE_SUPPORT_LINK, {
-      input: {
-        ...input,
-        permissions: toAwsJson(input.permissions),
-      },
-    });
-    return data.createSupportLink ? mapSupportLink(data.createSupportLink) : null;
+      { selectPrimaryUser: SupportLink },
+      { input: SelectPrimaryUserInput }
+    >(operations.SELECT_PRIMARY_USER, { input });
+    return data.selectPrimaryUser;
+  },
+
+  async unselectPrimaryUser(input: UnselectPrimaryUserInput): Promise<SupportLink> {
+    const data = await graphqlRequest<
+      { unselectPrimaryUser: SupportLink },
+      { input: UnselectPrimaryUserInput }
+    >(operations.UNSELECT_PRIMARY_USER, { input });
+    return data.unselectPrimaryUser;
   },
 
   async createCategory(input: CreateCategoryInput): Promise<Category | null> {
@@ -369,6 +516,14 @@ export const canPlanApi = {
     return data.updateTask;
   },
 
+  async createAiTask(input: CreateAiTaskInput): Promise<GeneratedAiTask> {
+    const data = await graphqlRequest<
+      { createAiTask: GeneratedAiTask },
+      { input: CreateAiTaskInput }
+    >(operations.CREATE_AI_TASK, { input });
+    return data.createAiTask;
+  },
+
   async createTaskStep(input: CreateTaskStepInput): Promise<TaskStep | null> {
     const data = await graphqlRequest<{ createTaskStep: TaskStep | null }, { input: CreateTaskStepInput }>(
       operations.CREATE_TASK_STEP,
@@ -399,6 +554,14 @@ export const canPlanApi = {
       { input },
     );
     return data.reorderTaskSteps;
+  },
+
+  async updateTaskOrder(input: UpdateTaskOrderInput): Promise<Task[]> {
+    const data = await graphqlRequest<
+      { updateTaskOrder: Task[] },
+      { input: UpdateTaskOrderInput }
+    >(operations.UPDATE_TASK_ORDER, { input });
+    return data.updateTaskOrder;
   },
 
   async deleteTask(taskId: string): Promise<Task | null> {
@@ -443,6 +606,26 @@ export const canPlanApi = {
       { input: SetTaskInstanceStepCompletionInput }
     >(operations.SET_TASK_INSTANCE_STEP_COMPLETION, { input });
     return data.setTaskInstanceStepCompletion;
+  },
+
+  async startTaskInstanceStep(
+    input: StartTaskInstanceStepInput,
+  ): Promise<TaskInstanceTimingResult> {
+    const data = await graphqlRequest<
+      { startTaskInstanceStep: TaskInstanceTimingResult },
+      { input: StartTaskInstanceStepInput }
+    >(operations.START_TASK_INSTANCE_STEP, { input });
+    return data.startTaskInstanceStep;
+  },
+
+  async pauseTaskInstanceTimer(
+    input: PauseTaskInstanceTimerInput,
+  ): Promise<TaskInstanceTimingResult> {
+    const data = await graphqlRequest<
+      { pauseTaskInstanceTimer: TaskInstanceTimingResult },
+      { input: PauseTaskInstanceTimerInput }
+    >(operations.PAUSE_TASK_INSTANCE_TIMER, { input });
+    return data.pauseTaskInstanceTimer;
   },
 
   async cancelTaskInstance(input: CancelTaskInstanceInput): Promise<TaskInstance> {
@@ -511,5 +694,126 @@ export const canPlanApi = {
       { input: GenerateTaskStepsInput }
     >(operations.GENERATE_TASK_STEPS, { input });
     return data.generateTaskSteps;
+  },
+
+  async generateReport(input: GenerateReportInput): Promise<GeneratedReport> {
+    const data = await graphqlRequest<
+      { generateReport: RawGeneratedReport },
+      { input: GenerateReportInput }
+    >(operations.GENERATE_REPORT, { input });
+    return mapGeneratedReport(data.generateReport);
+  },
+
+  async saveReport(input: SaveReportInput): Promise<Report> {
+    const data = await graphqlRequest<
+      { saveReport: RawReport },
+      {
+        input: Omit<SaveReportInput, 'scope' | 'dateRange' | 'stats'> & {
+          scope: string;
+          dateRange: string;
+          stats: string;
+        };
+      }
+    >(operations.SAVE_REPORT, {
+      input: {
+        ...input,
+        scope: JSON.stringify(input.scope),
+        dateRange: JSON.stringify(input.dateRange),
+        stats: JSON.stringify(input.stats),
+      },
+    });
+    return mapReport(data.saveReport);
+  },
+
+  async deleteReport(userId: string, reportId: string): Promise<boolean> {
+    const data = await graphqlRequest<
+      { deleteReport: boolean },
+      { userId: string; reportId: string }
+    >(operations.DELETE_REPORT, { userId, reportId });
+    return data.deleteReport;
+  },
+
+  async inviteSupportPerson(input: InviteUserInput): Promise<AdminUserResult> {
+    const data = await graphqlRequest<
+      { inviteSupportPerson: RawAdminUserResult },
+      { input: InviteUserInput }
+    >(operations.INVITE_SUPPORT_PERSON, { input });
+    return mapAdminUserResult(data.inviteSupportPerson);
+  },
+
+  async inviteOrganizationAdmin(input: InviteUserInput): Promise<AdminUserResult> {
+    const data = await graphqlRequest<
+      { inviteOrganizationAdmin: RawAdminUserResult },
+      { input: InviteUserInput }
+    >(operations.INVITE_ORGANIZATION_ADMIN, { input });
+    return mapAdminUserResult(data.inviteOrganizationAdmin);
+  },
+
+  async setUserBaseRole(input: SetUserBaseRoleInput): Promise<AdminUserResult> {
+    const data = await graphqlRequest<
+      { setUserBaseRole: RawAdminUserResult },
+      { input: SetUserBaseRoleInput }
+    >(operations.SET_USER_BASE_ROLE, { input });
+    return mapAdminUserResult(data.setUserBaseRole);
+  },
+
+  async setSystemAdmin(input: SetSystemAdminInput): Promise<AdminUserResult> {
+    const data = await graphqlRequest<
+      { setSystemAdmin: RawAdminUserResult },
+      { input: SetSystemAdminInput }
+    >(operations.SET_SYSTEM_ADMIN, { input });
+    return mapAdminUserResult(data.setSystemAdmin);
+  },
+
+  async adminDeleteTask(taskId: string): Promise<Task | null> {
+    const data = await graphqlRequest<
+      { adminDeleteTask: Task | null },
+      { taskId: string }
+    >(operations.ADMIN_DELETE_TASK, { taskId });
+    return data.adminDeleteTask;
+  },
+
+  async adminDeleteUser(input: AdminDeleteUserInput): Promise<AdminDeleteUserResult> {
+    const data = await graphqlRequest<
+      { adminDeleteUser: AdminDeleteUserResult },
+      { input: AdminDeleteUserInput }
+    >(operations.ADMIN_DELETE_USER, { input });
+    return data.adminDeleteUser;
+  },
+
+  async adminCreateOrganization(input: CreateOrganizationInput): Promise<Organization> {
+    const data = await graphqlRequest<
+      { adminCreateOrganization: Organization },
+      { input: CreateOrganizationInput }
+    >(operations.ADMIN_CREATE_ORGANIZATION, { input });
+    return data.adminCreateOrganization;
+  },
+
+  async adminUpdateOrganization(input: UpdateOrganizationInput): Promise<Organization> {
+    const data = await graphqlRequest<
+      { adminUpdateOrganization: Organization },
+      { input: UpdateOrganizationInput }
+    >(operations.ADMIN_UPDATE_ORGANIZATION, { input });
+    return data.adminUpdateOrganization;
+  },
+
+  async adminDeleteOrganization(
+    input: DeleteOrganizationInput,
+  ): Promise<AdminDeleteOrganizationResult> {
+    const data = await graphqlRequest<
+      { adminDeleteOrganization: AdminDeleteOrganizationResult },
+      { input: DeleteOrganizationInput }
+    >(operations.ADMIN_DELETE_ORGANIZATION, { input });
+    return data.adminDeleteOrganization;
+  },
+
+  async adminSetUserOrganization(
+    input: AdminSetUserOrganizationInput,
+  ): Promise<UserProfile> {
+    const data = await graphqlRequest<
+      { adminSetUserOrganization: RawUserProfile },
+      { input: AdminSetUserOrganizationInput }
+    >(operations.ADMIN_SET_USER_ORGANIZATION, { input });
+    return mapUserProfile(data.adminSetUserOrganization);
   },
 };

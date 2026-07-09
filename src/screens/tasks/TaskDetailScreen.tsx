@@ -24,7 +24,11 @@ export default function TaskDetailScreen() {
   const { taskId } = route.params;
 
   const taskQuery = useTask(taskId);
-  const categoriesQuery = useMyCategories(Boolean(taskQuery.data?.ownerId));
+  const categoriesQuery = useMyCategories(
+    Boolean(taskQuery.data?.ownerId),
+    50,
+    taskQuery.data?.ownerId,
+  );
   const deleteTaskMutation = useDeleteTask();
 
   const [confirmDelete, setConfirmDelete] = useState(false);

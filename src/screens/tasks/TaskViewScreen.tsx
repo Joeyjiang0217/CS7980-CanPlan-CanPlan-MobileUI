@@ -545,6 +545,7 @@ export default function TaskViewScreen() {
         return;
       }
       setFinishError(undefined);
+      const resolvedAt = new Date().toISOString();
       try {
         const id = await ensureInstance();
         // The backend rejects COMPLETED unless every step is marked complete on
@@ -567,7 +568,7 @@ export default function TaskViewScreen() {
         // Mirror into the in-memory store so the calendar reflects it instantly
         // even before the invalidated feed refetches.
         if (occKey && (status === 'COMPLETED' || status === 'SKIPPED')) {
-          setOccurrenceStatus(occKey, status);
+          setOccurrenceStatus(occKey, status, resolvedAt);
         }
         navigation.goBack();
       } catch (error) {
