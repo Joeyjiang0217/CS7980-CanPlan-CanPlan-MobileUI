@@ -25,8 +25,10 @@ import { getTaskInstanceViews } from '../features/assignments/api/assignmentApi'
 import {
   useAssignmentsForUser,
   useInstanceSteps,
+  useStartTaskInstance,
   useTaskInstances,
   useTaskInstanceViews,
+  useUpdateInstanceStatus,
 } from '../features/assignments/hooks/useAssignments';
 import {
   occurrenceState,
@@ -35,6 +37,7 @@ import {
 } from '../features/assignments/hooks/useSeriesActiveDates';
 import {
   occurrenceKey,
+  setOccurrenceStatus,
   useOccurrenceResolvedAt,
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
@@ -54,6 +57,7 @@ import type {
 } from '../shared/api/canplanTypes';
 import BackButton from '../shared/components/BackButton';
 import CachedImage from '../shared/components/CachedImage';
+import ConfirmDialog from '../shared/components/ConfirmDialog';
 import { queryKeys } from '../shared/query/queryKeys';
 import { colors, radius, shadow, spacing, typography } from '../shared/theme/tokens';
 
@@ -323,6 +327,11 @@ function AssignmentCard({
   isRecurring,
   repeatLabel,
   todayISO,
+  started,
+  starting,
+  finishing,
+  onStart,
+  onMarkDone,
   onPress,
 }: {
   view: TaskInstanceView;
@@ -337,6 +346,16 @@ function AssignmentCard({
   /** Recurrence type (e.g. "Daily") shown next to the time; omitted for one-time. */
   repeatLabel?: string;
   todayISO: string;
+  /** The occurrence is materialized (user pressed start) — show "In progress". */
+  started: boolean;
+  /** A start request for this occurrence is in flight. */
+  starting: boolean;
+  /** A mark-as-done request for this occurrence is in flight. */
+  finishing: boolean;
+  /** Ask to materialize this occurrence (To Do/Overdue, today or earlier). */
+  onStart: () => void;
+  /** Mark a fully-checked occurrence as done. */
+  onMarkDone: () => void;
   onPress: () => void;
 }) {
   // "Gray" occurrences (projected days after the active one) are inert: dimmed
@@ -365,6 +384,19 @@ function AssignmentCard({
     }
     return count;
   }, [instanceStepsQuery.data]);
+  // Every step checked on a started occurrence (but not yet marked done).
+  const allStepsDone = started && totalSteps > 0 && doneSteps >= totalSteps;
+  const stepsLine = (
+    <View style={styles.taskStepsRow}>
+      <Text numberOfLines={1} style={[styles.taskMeta, styles.taskMetaInline]}>
+        {doneSteps}/{totalSteps} steps
+      </Text>
+      {allStepsDone ? (
+        // Same dark-teal circle check as the task view's progress label.
+        <Ionicons name="checkmark-circle" size={16} color="#2E9C92" />
+      ) : null}
+    </View>
+  );
 
   // Title + time/repeat + steps — shared by both layouts.
   const textBlock = (
@@ -391,28 +423,89 @@ function AssignmentCard({
           {repeatLabel ? `${view.scheduledTime} · ${repeatLabel}` : view.scheduledTime}
         </Text>
       </View>
-      <Text numberOfLines={1} style={styles.taskMeta}>
-        {doneSteps}/{totalSteps} steps
-      </Text>
+      {stepsLine}
     </View>
   );
 
-  const statusTags = [
+  // Starting (materializing) is an explicit action, offered on today-or-earlier
+  // To Do/Overdue occurrences that aren't materialized yet. Once started, the
+  // spot shows a static "In progress" state instead.
+  const isActionBucket = bucket === 'todo' || bucket === 'overdue';
+  const canStart =
+    isActionBucket && !isGray && !started && view.scheduledDate <= todayISO;
+  const startButton = canStart ? (
+    <Pressable
+      key="start"
+      accessibilityRole="button"
+      accessibilityLabel={
+        bucket === 'overdue' ? `Start ${view.title} now` : `Start ${view.title}`
+      }
+      accessibilityState={{ disabled: starting }}
+      disabled={starting}
+      onPress={onStart}
+      style={({ pressed }) => [
+        styles.startButton,
+        pressed ? styles.startButtonPressed : null,
+        starting ? styles.startButtonDisabled : null,
+      ]}
+    >
+      <Ionicons name="play" size={12} color={colors.onPrimary} />
+      <Text style={styles.statusTagText}>
+        {starting ? 'Starting…' : bucket === 'overdue' ? 'Start now' : 'To Do'}
+      </Text>
+    </Pressable>
+  ) : null;
+  // Every step checked → the tag becomes a button that marks the whole
+  // occurrence done; otherwise it's a static "In progress" state.
+  const allDoneButton =
+    isActionBucket && started && allStepsDone ? (
+      <Pressable
+        key="all-done"
+        accessibilityRole="button"
+        accessibilityLabel={`Mark ${view.title} done`}
+        accessibilityState={{ disabled: finishing }}
+        disabled={finishing}
+        onPress={onMarkDone}
+        style={({ pressed }) => [
+          styles.startButton,
+          styles.allDoneButton,
+          pressed ? styles.startButtonPressed : null,
+          finishing ? styles.startButtonDisabled : null,
+        ]}
+      >
+        <Ionicons name="checkmark" size={12} color={colors.onPrimary} />
+        <Text style={styles.statusTagText}>{finishing ? 'Saving…' : 'All done!'}</Text>
+      </Pressable>
+    ) : null;
+  const inProgressTag =
+    isActionBucket && started && !allStepsDone ? (
+      <View key="in-progress" style={[styles.statusTag, styles.inProgressTag]}>
+        <Text style={styles.statusTagText}>In progress</Text>
+      </View>
+    ) : null;
+  const bucketChip = (
     <View key={bucket} style={[styles.statusTag, { backgroundColor: STATUS_ACCENT[bucket] }]}>
       <Text style={styles.statusTagText}>{STATUS_LABEL[bucket]}</Text>
-    </View>,
+    </View>
+  );
+  const statusTags = [
+    // The To Do chip itself is the start affordance / progress state; Overdue
+    // keeps its chip and stacks the start control under it.
+    bucket === 'todo' ? (startButton ?? allDoneButton ?? inProgressTag ?? bucketChip) : bucketChip,
+    bucket === 'overdue' ? (startButton ?? allDoneButton ?? inProgressTag) : null,
     wasOverdue ? (
       <View key="overdue" style={[styles.statusTag, { backgroundColor: STATUS_ACCENT.overdue }]}>
         <Text style={styles.statusTagText}>{STATUS_LABEL.overdue}</Text>
       </View>
     ) : null,
   ].filter(Boolean);
-  const statusTag = <View style={styles.statusTagRow}>{statusTags}</View>;
-  const compactStatusTag = (
-    <View style={[styles.statusTagRow, wasOverdue ? styles.statusTagColumn : null]}>
+  const stackTags = wasOverdue || (bucket === 'overdue' && statusTags.length > 1);
+  const statusTag = (
+    <View style={[styles.statusTagRow, stackTags ? styles.statusTagColumn : null]}>
       {statusTags}
     </View>
   );
+  const compactStatusTag = statusTag;
 
   return (
     <Pressable
@@ -459,9 +552,7 @@ function AssignmentCard({
                   {repeatLabel ? `${view.scheduledTime} · ${repeatLabel}` : view.scheduledTime}
                 </Text>
               </View>
-              <Text numberOfLines={1} style={styles.taskMeta}>
-                {doneSteps}/{totalSteps} steps
-              </Text>
+              {stepsLine}
             </View>
           </View>
           <View style={styles.compactTaskActions}>
@@ -1077,6 +1168,82 @@ function DayAssignmentsPage({
   const statusOverrides = useOccurrenceStatuses();
   const resolvedAtOverrides = useOccurrenceResolvedAt();
 
+  // Explicit start flow: pressing a card's To Do / "Start now" control asks for
+  // confirmation (starting forfeits delete — only skip remains), then
+  // materializes the occurrence. `startedKeys` bridges the gap until the
+  // invalidated feed refetch reports the occurrence as non-virtual.
+  const startInstance = useStartTaskInstance();
+  const [startTarget, setStartTarget] = useState<TaskInstanceView | null>(null);
+  const [startingKeys, setStartingKeys] = useState<ReadonlySet<string>>(new Set());
+  const [startedKeys, setStartedKeys] = useState<ReadonlySet<string>>(new Set());
+
+  const confirmStart = useCallback(
+    (view: TaskInstanceView) => {
+      const key = occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime);
+      setStartTarget(null);
+      setStartingKeys((current) => new Set(current).add(key));
+      startInstance.mutate(
+        {
+          userId: ownerId,
+          assignmentId: view.assignmentId,
+          scheduledDate: view.scheduledDate,
+          scheduledTime: view.scheduledTime,
+        },
+        {
+          onSuccess: () => {
+            setStartedKeys((current) => new Set(current).add(key));
+          },
+          onError: (error) => {
+            Alert.alert('Could not start this task', error.message);
+          },
+          onSettled: () => {
+            setStartingKeys((current) => {
+              const next = new Set(current);
+              next.delete(key);
+              return next;
+            });
+          },
+        },
+      );
+    },
+    [ownerId, startInstance],
+  );
+
+  // "All done!" tap: every step is already complete on the backend, so a single
+  // status update finishes the occurrence; the in-memory override moves the
+  // card to the Done bucket instantly, ahead of the feed refetch.
+  const updateStatus = useUpdateInstanceStatus();
+  const [markDoneTarget, setMarkDoneTarget] = useState<TaskInstanceView | null>(null);
+  const [finishingKeys, setFinishingKeys] = useState<ReadonlySet<string>>(new Set());
+  const markDone = useCallback(
+    (view: TaskInstanceView) => {
+      if (!view.instanceId) {
+        return;
+      }
+      const key = occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime);
+      setFinishingKeys((current) => new Set(current).add(key));
+      updateStatus.mutate(
+        { userId: ownerId, instanceId: view.instanceId, status: 'COMPLETED' },
+        {
+          onSuccess: () => {
+            setOccurrenceStatus(key, 'COMPLETED');
+          },
+          onError: (error) => {
+            Alert.alert('Could not mark this task done', error.message);
+          },
+          onSettled: () => {
+            setFinishingKeys((current) => {
+              const next = new Set(current);
+              next.delete(key);
+              return next;
+            });
+          },
+        },
+      );
+    },
+    [ownerId, updateStatus],
+  );
+
   const instanceResolvedAtByKey = useMemo(() => {
     const map = new Map<string, string | null | undefined>();
     for (const page of instancesQuery.data?.pages ?? []) {
@@ -1203,6 +1370,11 @@ function DayAssignmentsPage({
           isRecurring={isRecurring}
           repeatLabel={isRecurring ? describeRepeat(assignment) : undefined}
           todayISO={todayISO}
+          started={!view.isVirtual || startedKeys.has(key)}
+          starting={startingKeys.has(key)}
+          finishing={finishingKeys.has(key)}
+          onStart={() => setStartTarget(view)}
+          onMarkDone={() => setMarkDoneTarget(view)}
           onPress={handlePress}
         />
       );
@@ -1214,27 +1386,56 @@ function DayAssignmentsPage({
       coverByTask,
       coverThumbnailUriByTask,
       coverPreviewUriByTask,
+      finishingKeys,
       instanceResolvedAtByKey,
+      markDone,
       onOpen,
       ownerId,
       resolvedAtOverrides,
+      startedKeys,
+      startingKeys,
       statusOverrides,
       todayISO,
     ],
   );
 
   return (
-    <FlatList
-      style={{ width, height: height || undefined }}
-      contentContainerStyle={[styles.listContent, { paddingBottom: bottomPadding }]}
-      data={rows}
-      keyExtractor={(item) => item.key}
-      renderItem={renderRow}
-      initialNumToRender={6}
-      maxToRenderPerBatch={4}
-      windowSize={5}
-      showsVerticalScrollIndicator={false}
-    />
+    <>
+      <FlatList
+        style={{ width, height: height || undefined }}
+        contentContainerStyle={[styles.listContent, { paddingBottom: bottomPadding }]}
+        data={rows}
+        keyExtractor={(item) => item.key}
+        renderItem={renderRow}
+        initialNumToRender={6}
+        maxToRenderPerBatch={4}
+        windowSize={5}
+        showsVerticalScrollIndicator={false}
+      />
+      <ConfirmDialog
+        visible={startTarget !== null}
+        title="Start this task?"
+        message="Once you start, this task can't be deleted anymore — it can only be skipped."
+        confirmLabel="Start"
+        cancelLabel="Cancel"
+        onConfirm={() => startTarget && confirmStart(startTarget)}
+        onCancel={() => setStartTarget(null)}
+      />
+      <ConfirmDialog
+        visible={markDoneTarget !== null}
+        title="All steps done!"
+        message="Great work — do you want to mark this task as done now?"
+        confirmLabel="Mark as done"
+        cancelLabel="Later"
+        onConfirm={() => {
+          if (markDoneTarget) {
+            markDone(markDoneTarget);
+          }
+          setMarkDoneTarget(null);
+        }}
+        onCancel={() => setMarkDoneTarget(null)}
+      />
+    </>
   );
 }
 
@@ -1988,10 +2189,43 @@ const styles = StyleSheet.create({
   taskMetaInline: {
     marginTop: 0,
   },
+  taskStepsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
   statusTag: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     borderRadius: radius.pill,
+  },
+  // Pressable start control — icon + raised shadow so it reads as a button,
+  // unlike the flat status chips around it.
+  startButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primary,
+    ...shadow.card,
+  },
+  startButtonPressed: {
+    opacity: 0.72,
+  },
+  startButtonDisabled: {
+    backgroundColor: colors.disabled,
+  },
+  // Static "In progress" state after starting (teal, matching step progress).
+  inProgressTag: {
+    backgroundColor: '#3DB8AD',
+  },
+  // "All done!" reuses the start-button treatment in the progress teal.
+  allDoneButton: {
+    backgroundColor: '#3DB8AD',
   },
   statusTagRow: {
     flexDirection: 'row',

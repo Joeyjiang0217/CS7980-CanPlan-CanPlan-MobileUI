@@ -3,14 +3,25 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as Speech from 'expo-speech';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  AppState,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  pauseTaskInstanceTimer,
+  startTaskInstanceStep,
+} from '../../features/assignments/api/assignmentApi';
+import {
   useInstanceSteps,
   useSetInstanceStepCompletion,
-  useStartTaskInstance,
 } from '../../features/assignments/hooks/useAssignments';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
 import { useCachedMediaUri } from '../../features/media/hooks/useCachedMedia';
@@ -28,19 +39,20 @@ export default function StepDetailScreen() {
   const route = useRoute<StepDetailRoute>();
   const insets = useSafeAreaInsets();
   const { taskId, stepId, assignmentId, scheduledDate, scheduledTime, status } = route.params;
+  const instanceId = route.params.instanceId;
 
   const isInstance = Boolean(assignmentId && scheduledDate && scheduledTime);
-  // Completed/skipped occurrences are read-only here, matching the step list.
-  const canToggle = isInstance && status !== 'COMPLETED' && status !== 'SKIPPED';
+  // Toggling needs a materialized instance (started from the calendar), and
+  // completed/skipped occurrences are read-only here, matching the step list.
+  const canToggle =
+    isInstance && Boolean(instanceId) && status !== 'COMPLETED' && status !== 'SKIPPED';
 
   // Cloud-first completion state, same as TaskViewScreen: the instance's step
   // snapshot is the source of truth, with an optimistic flip while saving.
   const [ownerId, setOwnerId] = useState('');
-  const [instanceId, setInstanceId] = useState<string | undefined>(route.params.instanceId);
   const [override, setOverride] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>();
-  const startInstance = useStartTaskInstance();
   const stepToggle = useSetInstanceStepCompletion();
 
   useEffect(() => {
@@ -73,34 +85,48 @@ export default function StepDetailScreen() {
     setOverride((current) => (current !== null && current === serverCompleted ? null : current));
   }, [serverCompleted]);
 
-  // Materialize on demand (shared in-flight call), mirroring TaskViewScreen.
-  const instancePromiseRef = useRef<Promise<string> | null>(null);
-  const ensureInstance = useCallback(() => {
-    if (instanceId) {
-      return Promise.resolve(instanceId);
+  // ── Server-side step timing ──────────────────────────────────────────────
+  // While this step is focused on a started (non-settled) occurrence, its
+  // backend timer runs. Leaving the screen or backgrounding/locking pauses it;
+  // returning resumes it. Already-completed steps are not timed (undoing one
+  // restarts the timer). Both mutations are idempotent and the timing is
+  // best-effort telemetry, so calls are fire-and-forget (no invalidation).
+  useEffect(() => {
+    if (!canToggle || !ownerId || !instanceId || completed) {
+      return;
     }
-    if (!instancePromiseRef.current) {
-      instancePromiseRef.current = startInstance
-        .mutateAsync({
-          userId: ownerId,
-          assignmentId: assignmentId as string,
-          scheduledDate: scheduledDate as string,
-          scheduledTime: scheduledTime as string,
-        })
-        .then((created) => {
-          setInstanceId(created.instanceId);
-          return created.instanceId;
-        })
-        .catch((error: unknown) => {
-          instancePromiseRef.current = null;
-          throw error;
-        });
-    }
-    return instancePromiseRef.current;
-  }, [instanceId, ownerId, assignmentId, scheduledDate, scheduledTime, startInstance]);
+    const beginTiming = () => {
+      void startTaskInstanceStep({ userId: ownerId, instanceId, stepId }).catch(
+        (error: unknown) => {
+          if (__DEV__) {
+            console.warn('[step-timing] startTaskInstanceStep failed', error);
+          }
+        },
+      );
+    };
+    const pauseTiming = () => {
+      void pauseTaskInstanceTimer({ userId: ownerId, instanceId }).catch((error: unknown) => {
+        if (__DEV__) {
+          console.warn('[step-timing] pauseTaskInstanceTimer failed', error);
+        }
+      });
+    };
+    beginTiming();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        beginTiming();
+      } else {
+        pauseTiming();
+      }
+    });
+    return () => {
+      subscription.remove();
+      pauseTiming();
+    };
+  }, [canToggle, ownerId, instanceId, stepId, completed]);
 
   const toggleCompleted = useCallback(async () => {
-    if (!canToggle || !ownerId || saving) {
+    if (!canToggle || !instanceId || !ownerId || saving) {
       return;
     }
     const nextCompleted = !completed;
@@ -108,10 +134,9 @@ export default function StepDetailScreen() {
     setSaving(true);
     setOverride(nextCompleted);
     try {
-      const id = await ensureInstance();
       await stepToggle.mutateAsync({
         userId: ownerId,
-        instanceId: id,
+        instanceId,
         stepId,
         completed: nextCompleted,
       });
@@ -124,7 +149,7 @@ export default function StepDetailScreen() {
     } finally {
       setSaving(false);
     }
-  }, [canToggle, ownerId, saving, completed, ensureInstance, stepToggle, stepId]);
+  }, [canToggle, instanceId, ownerId, saving, completed, stepToggle, stepId]);
 
   const taskQuery = useTask(taskId);
   const stepsQuery = useTaskSteps(taskId);

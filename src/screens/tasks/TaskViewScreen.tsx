@@ -48,6 +48,12 @@ const TEAL = '#3DB8AD';
 const TEAL_DARK = '#2E9C92';
 const TEAL_LIGHT = '#EBF9F8';
 
+// "List time isn't tracked" reminder: shown at most once per this interval,
+// across all task views (module-level, so it resets on app restart).
+const TIMING_HINT_COOLDOWN_MS = 30 * 60 * 1000;
+const TIMING_HINT_AUTO_HIDE_MS = 8 * 1000;
+let timingHintLastShownAt = 0;
+
 function scheduledOccurrenceMs(
   scheduledFor: string | undefined,
   scheduledDate: string | undefined,
@@ -640,23 +646,31 @@ export default function TaskViewScreen() {
     return instancePromiseRef.current;
   }, [instanceId, ownerId, assignmentId, scheduledDate, scheduledTime, startInstance]);
 
-  // Opening a today-or-earlier To Do/Overdue occurrence materializes it right
-  // away so step checks persist to the backend. (The calendar routes future
-  // occurrences to OccurrenceDetail, so this guard is just belt-and-braces.)
+  // Materializing is an explicit calendar action (the card's To Do / "Start
+  // now" button). An occurrence without an instance renders read-only here:
+  // steps are visible but there is no progress bar, check-off, or skip.
+  const isMaterialized = Boolean(instanceId);
+
+  // Remind the user that time on this list isn't tracked — only opened steps
+  // are. Auto-hides, and stays quiet for a while once shown.
+  const [timingHintVisible, setTimingHintVisible] = useState(false);
   useEffect(() => {
-    if (!isInstance || instanceId || !ownerId || isCompletedOcc || isSkippedOcc) {
+    if (!isInstance || !isMaterialized || isCompletedOcc || isSkippedOcc) {
       return;
     }
-    const now = new Date();
-    const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-      now.getDate(),
-    ).padStart(2, '0')}`;
-    if ((scheduledDate as string) > todayISO) {
+    if (Date.now() - timingHintLastShownAt < TIMING_HINT_COOLDOWN_MS) {
       return;
     }
-    // Failure is non-fatal: the screen stays readable and the first check tap retries.
-    void ensureInstance().catch(() => {});
-  }, [isInstance, instanceId, ownerId, isCompletedOcc, isSkippedOcc, scheduledDate, ensureInstance]);
+    timingHintLastShownAt = Date.now();
+    setTimingHintVisible(true);
+  }, [isInstance, isMaterialized, isCompletedOcc, isSkippedOcc]);
+  useEffect(() => {
+    if (!timingHintVisible) {
+      return;
+    }
+    const timer = setTimeout(() => setTimingHintVisible(false), TIMING_HINT_AUTO_HIDE_MS);
+    return () => clearTimeout(timer);
+  }, [timingHintVisible]);
 
   // One step check-off: optimistic flip, then persist to the backend.
   const toggleStep = useCallback(
@@ -809,7 +823,7 @@ export default function TaskViewScreen() {
   // Offer to mark the occurrence done the moment the last step is checked off
   // (transition only — entering the screen with everything already checked, or
   // the server state still loading in, stays quiet).
-  const canPromptAllDone = allDone && !isCompletedOcc && !isSkippedOcc;
+  const canPromptAllDone = allDone && isMaterialized && !isCompletedOcc && !isSkippedOcc;
   const stepsReady = !isInstance || !instanceId || instanceStepsQuery.data !== undefined;
   const prevAllDoneRef = useRef<boolean | undefined>(undefined);
   useEffect(() => {
@@ -929,7 +943,7 @@ export default function TaskViewScreen() {
         )}
       </View>
 
-      {isInstance && stepCount > 0 && !isSkippedOcc ? (
+      {isInstance && stepCount > 0 && !isSkippedOcc && isMaterialized ? (
         <View style={styles.progressWrap}>
           <View style={styles.progressLabelRow}>
             <Text style={styles.progressLabel}>
@@ -989,7 +1003,7 @@ export default function TaskViewScreen() {
                   onDeactivate={deactivateStep}
                   isInstance={isInstance}
                   completed={completedSteps.has(step.stepId)}
-                  showCompletionControl={!isSkippedOcc}
+                  showCompletionControl={!isSkippedOcc && isMaterialized}
                   checkReadOnly={isCompletedOcc}
                   onToggleComplete={() => void toggleStep(step.stepId)}
                   onOpenDetail={() =>
@@ -1012,7 +1026,7 @@ export default function TaskViewScreen() {
             </View>
           )}
 
-          {isInstance && stepCount > 0 ? (
+          {isInstance && stepCount > 0 && isMaterialized ? (
             isCompletedOcc ? (
               // A done occurrence can't be skipped (req: done ↛ skipped).
               <View style={[styles.statusNotice, styles.statusNoticeDone]}>
@@ -1047,7 +1061,33 @@ export default function TaskViewScreen() {
 
         {/* Skipped occurrence: the un-skip control floats above the scrolling steps. */}
         {isSkippedOcc ? <View style={styles.unskipFloat}>{unskipControl}</View> : null}
+
       </View>
+
+      {/* Floating reminder (dialog-shaped, auto-hides, doesn't block the page):
+          list browsing isn't timed, opened steps are. */}
+      {timingHintVisible ? (
+        <View style={styles.timingHintOverlay} pointerEvents="box-none">
+          <View style={styles.timingHintDialog}>
+            <Ionicons name="time-outline" size={28} color={colors.text} />
+            <Text style={styles.timingHintTitle}>Step timing</Text>
+            <Text style={styles.timingHintMessage}>
+              Time on this list isn’t counted — open a step to track your active time.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss timing reminder"
+              onPress={() => setTimingHintVisible(false)}
+              style={({ pressed }) => [
+                styles.timingHintButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Text style={styles.timingHintButtonText}>Got it</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <ConfirmDialog
         visible={skipConfirmVisible}
@@ -1152,6 +1192,50 @@ const styles = StyleSheet.create({
   // matching the old in-flow spacing (spacer + list gap).
   contentUnderUnskip: {
     paddingTop: 56 + spacing.lg * 2,
+  },
+  // Dialog-shaped "list time isn't tracked" reminder. Floats over the screen
+  // center like ConfirmDialog but has no backdrop and auto-hides.
+  timingHintOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  timingHintDialog: {
+    width: '100%',
+    maxWidth: 420,
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.lg,
+    ...shadow.cardStrong,
+  },
+  timingHintTitle: {
+    ...typography.title,
+    color: colors.text,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  timingHintMessage: {
+    ...typography.body,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginBottom: spacing.xl,
+  },
+  timingHintButton: {
+    minHeight: 56,
+    borderRadius: radius.md,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+  },
+  timingHintButtonText: {
+    ...typography.button,
+    color: colors.onPrimary,
   },
   emptyState: {
     minHeight: 220,

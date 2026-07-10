@@ -9,6 +9,7 @@ import {
   useCancelTaskInstance,
   useDeleteAssignment,
   useEndAssignment,
+  useTaskInstance,
   useTaskInstanceViews,
 } from '../../features/assignments/hooks/useAssignments';
 import {
@@ -48,6 +49,14 @@ const formatLongDate = (iso: string) => {
     day: 'numeric',
     year: 'numeric',
   });
+};
+const formatActiveDuration = (totalSeconds: number) => {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = Math.floor(totalSeconds % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 };
 
 export default function OccurrenceDetailScreen() {
@@ -104,6 +113,37 @@ export default function OccurrenceDetailScreen() {
     overrides.get(occurrenceKey(assignmentId, scheduledDate, scheduledTime)) ??
     occurrence?.status ??
     paramStatus;
+
+  // Server-tracked focused time — only exists once the occurrence is
+  // materialized (started); virtual occurrences show a dash.
+  const timedInstanceId = occurrence?.isVirtual ? undefined : occurrence?.instanceId ?? undefined;
+  const instanceQuery = useTaskInstance(timedInstanceId ?? '', Boolean(timedInstanceId));
+  const instance = instanceQuery.data;
+
+  // A running step timer isn't in activeDurationSeconds yet (the server only
+  // accumulates on close), so add the open interval and tick it every second.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!instance?.activeStepStartedAt) {
+      return;
+    }
+    const timer = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [instance?.activeStepStartedAt]);
+
+  const activeTimeLabel = useMemo(() => {
+    if (!timedInstanceId || !instance) {
+      return '—';
+    }
+    let totalSeconds = instance.activeDurationSeconds;
+    if (instance.activeStepStartedAt) {
+      const startedMs = new Date(instance.activeStepStartedAt).getTime();
+      if (Number.isFinite(startedMs) && nowTick > startedMs) {
+        totalSeconds += Math.floor((nowTick - startedMs) / 1000);
+      }
+    }
+    return formatActiveDuration(totalSeconds);
+  }, [timedInstanceId, instance, nowTick]);
 
   // Where this occurrence sits in its series decides what "delete" can do:
   //   active  → this occurrence, or this and all future (manage the series);
@@ -202,6 +242,11 @@ export default function OccurrenceDetailScreen() {
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Status</Text>
             <Text style={styles.rowValue}>{STATUS_LABEL[status]}</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>Total active time</Text>
+            <Text style={styles.rowValue}>{activeTimeLabel}</Text>
           </View>
         </View>
 

@@ -82,6 +82,9 @@ export function useTaskInstance(instanceId: string, enabled = true) {
     queryKey: queryKeys.assignments.instance(instanceId),
     queryFn: () => getTaskInstance(instanceId),
     enabled: enabled && Boolean(instanceId),
+    // Carries live timing fields (activeDurationSeconds/activeStepStartedAt),
+    // so always refetch on mount instead of serving the 5-minute-stale cache.
+    staleTime: 0,
   });
 }
 
