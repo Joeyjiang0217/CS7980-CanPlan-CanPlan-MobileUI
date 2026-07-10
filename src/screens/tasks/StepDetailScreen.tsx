@@ -3,15 +3,16 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as Speech from 'expo-speech';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  occurrenceKey,
-  toggleOccurrenceStep,
-  useCompletedSteps,
-} from '../../features/assignments/occurrenceCompletion';
+  useInstanceSteps,
+  useSetInstanceStepCompletion,
+  useStartTaskInstance,
+} from '../../features/assignments/hooks/useAssignments';
+import { getCurrentUserId } from '../../shared/api/authTokenProvider';
 import { useCachedMediaUri } from '../../features/media/hooks/useCachedMedia';
 import { useTask } from '../../features/tasks/hooks/useTask';
 import { useTaskSteps } from '../../features/tasks/hooks/useTaskApi';
@@ -26,15 +27,104 @@ export default function StepDetailScreen() {
   const navigation = useNavigation<StepDetailNavigation>();
   const route = useRoute<StepDetailRoute>();
   const insets = useSafeAreaInsets();
-  const { taskId, stepId, assignmentId, scheduledDate, scheduledTime } = route.params;
+  const { taskId, stepId, assignmentId, scheduledDate, scheduledTime, status } = route.params;
 
   const isInstance = Boolean(assignmentId && scheduledDate && scheduledTime);
-  const occKey =
-    assignmentId && scheduledDate && scheduledTime
-      ? occurrenceKey(assignmentId, scheduledDate, scheduledTime)
-      : '';
-  const completedSteps = useCompletedSteps(occKey);
-  const completed = completedSteps.has(stepId);
+  // Completed/skipped occurrences are read-only here, matching the step list.
+  const canToggle = isInstance && status !== 'COMPLETED' && status !== 'SKIPPED';
+
+  // Cloud-first completion state, same as TaskViewScreen: the instance's step
+  // snapshot is the source of truth, with an optimistic flip while saving.
+  const [ownerId, setOwnerId] = useState('');
+  const [instanceId, setInstanceId] = useState<string | undefined>(route.params.instanceId);
+  const [override, setOverride] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string>();
+  const startInstance = useStartTaskInstance();
+  const stepToggle = useSetInstanceStepCompletion();
+
+  useEffect(() => {
+    let mounted = true;
+    void getCurrentUserId().then((id) => {
+      if (mounted) {
+        setOwnerId(id);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const instanceStepsQuery = useInstanceSteps(ownerId, instanceId ?? '');
+  const serverCompleted = useMemo(() => {
+    for (const page of instanceStepsQuery.data?.pages ?? []) {
+      for (const item of page.items) {
+        if (item.stepId === stepId) {
+          return item.completed;
+        }
+      }
+    }
+    return false;
+  }, [instanceStepsQuery.data, stepId]);
+  const completed = override ?? serverCompleted;
+
+  // Drop the optimistic override once the refetched server state agrees.
+  useEffect(() => {
+    setOverride((current) => (current !== null && current === serverCompleted ? null : current));
+  }, [serverCompleted]);
+
+  // Materialize on demand (shared in-flight call), mirroring TaskViewScreen.
+  const instancePromiseRef = useRef<Promise<string> | null>(null);
+  const ensureInstance = useCallback(() => {
+    if (instanceId) {
+      return Promise.resolve(instanceId);
+    }
+    if (!instancePromiseRef.current) {
+      instancePromiseRef.current = startInstance
+        .mutateAsync({
+          userId: ownerId,
+          assignmentId: assignmentId as string,
+          scheduledDate: scheduledDate as string,
+          scheduledTime: scheduledTime as string,
+        })
+        .then((created) => {
+          setInstanceId(created.instanceId);
+          return created.instanceId;
+        })
+        .catch((error: unknown) => {
+          instancePromiseRef.current = null;
+          throw error;
+        });
+    }
+    return instancePromiseRef.current;
+  }, [instanceId, ownerId, assignmentId, scheduledDate, scheduledTime, startInstance]);
+
+  const toggleCompleted = useCallback(async () => {
+    if (!canToggle || !ownerId || saving) {
+      return;
+    }
+    const nextCompleted = !completed;
+    setSaveError(undefined);
+    setSaving(true);
+    setOverride(nextCompleted);
+    try {
+      const id = await ensureInstance();
+      await stepToggle.mutateAsync({
+        userId: ownerId,
+        instanceId: id,
+        stepId,
+        completed: nextCompleted,
+      });
+    } catch (error) {
+      // Roll the optimistic flip back and surface the failure.
+      setOverride(null);
+      setSaveError(
+        error instanceof Error ? error.message : 'Could not save this step. Please try again.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [canToggle, ownerId, saving, completed, ensureInstance, stepToggle, stepId]);
 
   const taskQuery = useTask(taskId);
   const stepsQuery = useTaskSteps(taskId);
@@ -198,27 +288,38 @@ export default function StepDetailScreen() {
         </View>
       </ScrollView>
 
-      {isInstance ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={completed ? 'Mark step not done' : 'Mark step done'}
-          onPress={() => occKey && toggleOccurrenceStep(occKey, stepId)}
-          style={({ pressed }) => [
-            styles.doneButton,
-            completed ? styles.undoButton : styles.markDoneButton,
-            { marginBottom: insets.bottom + spacing.lg },
-            pressed ? styles.pressed : null,
-          ]}
+      {canToggle ? (
+        <View
+          style={[styles.doneArea, { marginBottom: insets.bottom + spacing.lg }]}
+          pointerEvents="box-none"
         >
-          <Ionicons
-            name={completed ? 'arrow-undo' : 'checkmark'}
-            size={20}
-            color={completed ? colors.danger : colors.onPrimary}
-          />
-          <Text style={[styles.doneText, completed ? styles.undoText : styles.markDoneText]}>
-            {completed ? 'Undo — not done yet' : 'Mark as done'}
-          </Text>
-        </Pressable>
+          {saveError ? (
+            <Text accessibilityRole="alert" style={styles.saveError}>
+              {saveError}
+            </Text>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={completed ? 'Mark step not done' : 'Mark step done'}
+            accessibilityState={{ disabled: saving }}
+            disabled={saving}
+            onPress={() => void toggleCompleted()}
+            style={({ pressed }) => [
+              styles.doneButton,
+              completed ? styles.undoButton : styles.markDoneButton,
+              pressed ? styles.pressed : null,
+            ]}
+          >
+            <Ionicons
+              name={completed ? 'arrow-undo' : 'checkmark'}
+              size={20}
+              color={completed ? colors.danger : colors.onPrimary}
+            />
+            <Text style={[styles.doneText, completed ? styles.undoText : styles.markDoneText]}>
+              {saving ? 'Saving…' : completed ? 'Undo — not done yet' : 'Mark as done'}
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
     </View>
   );
@@ -319,11 +420,19 @@ const styles = StyleSheet.create({
     ...typography.button,
     color: colors.primary,
   },
-  doneButton: {
+  doneArea: {
     position: 'absolute',
     left: spacing.xl,
     right: spacing.xl,
     bottom: 0,
+    gap: spacing.sm,
+  },
+  saveError: {
+    ...typography.body,
+    color: colors.danger,
+    textAlign: 'center',
+  },
+  doneButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

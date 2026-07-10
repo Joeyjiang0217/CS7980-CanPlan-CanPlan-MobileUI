@@ -72,6 +72,10 @@ export type MainStackParamList = {
     assignmentId?: string;
     scheduledDate?: string;
     scheduledTime?: string;
+    /** Present when the occurrence is already materialized (skips re-starting it). */
+    instanceId?: string;
+    /** Occurrence status — completed/skipped render the step read-only. */
+    status?: TaskInstanceStatus;
   };
   /**
    * `fixedCategoryId` pins the new task to one category and hides the category

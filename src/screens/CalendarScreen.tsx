@@ -24,6 +24,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { getTaskInstanceViews } from '../features/assignments/api/assignmentApi';
 import {
   useAssignmentsForUser,
+  useInstanceSteps,
   useTaskInstances,
   useTaskInstanceViews,
 } from '../features/assignments/hooks/useAssignments';
@@ -34,7 +35,6 @@ import {
 } from '../features/assignments/hooks/useSeriesActiveDates';
 import {
   occurrenceKey,
-  useCompletedSteps,
   useOccurrenceResolvedAt,
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
@@ -315,6 +315,7 @@ function AssignmentCard({
   view,
   bucket,
   wasOverdue,
+  ownerId,
   coverAssetId,
   coverUri,
   coverPreviewUri,
@@ -327,6 +328,7 @@ function AssignmentCard({
   view: TaskInstanceView;
   bucket: StatusKey;
   wasOverdue: boolean;
+  ownerId: string;
   coverAssetId?: string | null;
   coverUri?: string | null;
   coverPreviewUri?: string | null;
@@ -344,17 +346,25 @@ function AssignmentCard({
   const useHeroImage = !isGray && bucket === 'todo' && view.scheduledDate === todayISO;
   const heroCoverUri = coverPreviewUri ?? coverUri;
   // Step completion progress is what distinguishes an assignment occurrence from
-  // a plain task: total comes from the real task steps, done from the (UI-only)
-  // occurrence completion store.
+  // a plain task: total comes from the task's steps, done from the backend's
+  // instance step snapshots (virtual occurrences have none → 0 done).
   const stepsQuery = useTaskSteps(view.taskId);
   const totalSteps = stepsQuery.data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0;
-  const completed = useCompletedSteps(
-    occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
+  const instanceStepsQuery = useInstanceSteps(
+    ownerId,
+    view.isVirtual ? '' : view.instanceId ?? '',
   );
-  const doneSteps = stepsQuery.data
-    ? (stepsQuery.data.pages.flatMap((page) => page.items).filter((s) => completed.has(s.stepId))
-        .length)
-    : 0;
+  const doneSteps = useMemo(() => {
+    let count = 0;
+    for (const page of instanceStepsQuery.data?.pages ?? []) {
+      for (const item of page.items) {
+        if (item.completed) {
+          count += 1;
+        }
+      }
+    }
+    return count;
+  }, [instanceStepsQuery.data]);
 
   // Title + time/repeat + steps — shared by both layouts.
   const textBlock = (
@@ -1185,6 +1195,7 @@ function DayAssignmentsPage({
           view={view}
           bucket={activeStatus}
           wasOverdue={wasOverdue}
+          ownerId={ownerId}
           coverAssetId={coverByTask.get(view.taskId)}
           coverUri={coverThumbnailUriByTask.get(view.taskId) ?? null}
           coverPreviewUri={coverPreviewUriByTask.get(view.taskId) ?? null}
@@ -1205,6 +1216,7 @@ function DayAssignmentsPage({
       coverPreviewUriByTask,
       instanceResolvedAtByKey,
       onOpen,
+      ownerId,
       resolvedAtOverrides,
       statusOverrides,
       todayISO,

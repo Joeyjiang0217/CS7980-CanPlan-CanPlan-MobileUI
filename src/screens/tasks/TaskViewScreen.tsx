@@ -20,11 +20,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   occurrenceKey,
   setOccurrenceStatus,
-  toggleOccurrenceStep,
-  useCompletedSteps,
   useOccurrenceStatuses,
 } from '../../features/assignments/occurrenceCompletion';
 import {
+  useInstanceSteps,
   useSetInstanceStepCompletion,
   useStartTaskInstance,
   useUpdateInstanceStatus,
@@ -517,7 +516,6 @@ export default function TaskViewScreen() {
     assignmentId && scheduledDate && scheduledTime
       ? occurrenceKey(assignmentId, scheduledDate, scheduledTime)
       : '';
-  const completedSteps = useCompletedSteps(occKey);
 
   // Effective occurrence status: an in-memory override (just marked done/skipped
   // this session) wins over the status the calendar passed in. Drives the
@@ -549,6 +547,9 @@ export default function TaskViewScreen() {
   const startInstance = useStartTaskInstance();
   const updateStatus = useUpdateInstanceStatus();
   const setStepCompletion = useSetInstanceStepCompletion();
+  // Separate mutation instance for per-step check-offs so a step sync doesn't
+  // flip the finish controls into their "Saving…" state.
+  const stepToggle = useSetInstanceStepCompletion();
   const isFinishing =
     startInstance.isPending || updateStatus.isPending || setStepCompletion.isPending;
 
@@ -564,20 +565,137 @@ export default function TaskViewScreen() {
     };
   }, []);
 
-  // Resolve (materializing on demand) the real instance id for this occurrence.
-  const ensureInstance = useCallback(async () => {
-    if (instanceId) {
-      return instanceId;
+  // Cloud-first step completion: the materialized instance's step snapshots are
+  // the source of truth; an optimistic overlay keeps taps instant while each
+  // write syncs to the backend.
+  const instanceStepsQuery = useInstanceSteps(ownerId, instanceId ?? '');
+  const serverCompletedSteps = useMemo(() => {
+    const set = new Set<string>();
+    for (const page of instanceStepsQuery.data?.pages ?? []) {
+      for (const item of page.items) {
+        if (item.completed) {
+          set.add(item.stepId);
+        }
+      }
     }
-    const created = await startInstance.mutateAsync({
-      userId: ownerId,
-      assignmentId: assignmentId as string,
-      scheduledDate: scheduledDate as string,
-      scheduledTime: scheduledTime as string,
+    return set;
+  }, [instanceStepsQuery.data]);
+  const [stepOverrides, setStepOverrides] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const [pendingSteps, setPendingSteps] = useState<ReadonlySet<string>>(new Set());
+  const completedSteps = useMemo(() => {
+    const set = new Set(serverCompletedSteps);
+    stepOverrides.forEach((completed, stepId) => {
+      if (completed) {
+        set.add(stepId);
+      } else {
+        set.delete(stepId);
+      }
     });
-    setInstanceId(created.instanceId);
-    return created.instanceId;
+    return set;
+  }, [serverCompletedSteps, stepOverrides]);
+
+  // Drop an optimistic override once the refetched server state agrees with it.
+  useEffect(() => {
+    setStepOverrides((current) => {
+      if (current.size === 0) {
+        return current;
+      }
+      const next = new Map(current);
+      let changed = false;
+      current.forEach((completed, stepId) => {
+        if (serverCompletedSteps.has(stepId) === completed) {
+          next.delete(stepId);
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+  }, [serverCompletedSteps]);
+
+  // Resolve (materializing on demand) the real instance id for this occurrence.
+  // Concurrent callers (the open-effect plus a fast first tap) share one
+  // in-flight startTaskInstance call.
+  const instancePromiseRef = useRef<Promise<string> | null>(null);
+  const ensureInstance = useCallback(() => {
+    if (instanceId) {
+      return Promise.resolve(instanceId);
+    }
+    if (!instancePromiseRef.current) {
+      instancePromiseRef.current = startInstance
+        .mutateAsync({
+          userId: ownerId,
+          assignmentId: assignmentId as string,
+          scheduledDate: scheduledDate as string,
+          scheduledTime: scheduledTime as string,
+        })
+        .then((created) => {
+          setInstanceId(created.instanceId);
+          return created.instanceId;
+        })
+        .catch((error: unknown) => {
+          instancePromiseRef.current = null;
+          throw error;
+        });
+    }
+    return instancePromiseRef.current;
   }, [instanceId, ownerId, assignmentId, scheduledDate, scheduledTime, startInstance]);
+
+  // Opening a today-or-earlier To Do/Overdue occurrence materializes it right
+  // away so step checks persist to the backend. (The calendar routes future
+  // occurrences to OccurrenceDetail, so this guard is just belt-and-braces.)
+  useEffect(() => {
+    if (!isInstance || instanceId || !ownerId || isCompletedOcc || isSkippedOcc) {
+      return;
+    }
+    const now = new Date();
+    const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate(),
+    ).padStart(2, '0')}`;
+    if ((scheduledDate as string) > todayISO) {
+      return;
+    }
+    // Failure is non-fatal: the screen stays readable and the first check tap retries.
+    void ensureInstance().catch(() => {});
+  }, [isInstance, instanceId, ownerId, isCompletedOcc, isSkippedOcc, scheduledDate, ensureInstance]);
+
+  // One step check-off: optimistic flip, then persist to the backend.
+  const toggleStep = useCallback(
+    async (stepId: string) => {
+      if (!isInstance || !ownerId || pendingSteps.has(stepId)) {
+        return;
+      }
+      const nextCompleted = !completedSteps.has(stepId);
+      setFinishError(undefined);
+      setPendingSteps((current) => new Set(current).add(stepId));
+      setStepOverrides((current) => new Map(current).set(stepId, nextCompleted));
+      try {
+        const id = await ensureInstance();
+        await stepToggle.mutateAsync({
+          userId: ownerId,
+          instanceId: id,
+          stepId,
+          completed: nextCompleted,
+        });
+      } catch (error) {
+        // Roll the optimistic flip back and surface the failure.
+        setStepOverrides((current) => {
+          const next = new Map(current);
+          next.delete(stepId);
+          return next;
+        });
+        setFinishError(
+          error instanceof Error ? error.message : 'Could not save this step. Please try again.',
+        );
+      } finally {
+        setPendingSteps((current) => {
+          const next = new Set(current);
+          next.delete(stepId);
+          return next;
+        });
+      }
+    },
+    [isInstance, ownerId, pendingSteps, completedSteps, ensureInstance, stepToggle],
+  );
 
   const finishOccurrence = useCallback(
     async (status: PersistedTaskInstanceStatus) => {
@@ -682,20 +800,29 @@ export default function TaskViewScreen() {
 
   const stepCount = steps.length;
   const allDone = isInstance && stepCount > 0 && doneCount === stepCount;
-  const isLoading = taskQuery.isLoading || stepsQuery.isLoading;
+  const isLoading =
+    taskQuery.isLoading ||
+    stepsQuery.isLoading ||
+    (isInstance && Boolean(instanceId) && instanceStepsQuery.isLoading);
   const error = taskQuery.error?.message;
 
   // Offer to mark the occurrence done the moment the last step is checked off
-  // (transition only — entering the screen with everything checked stays quiet).
+  // (transition only — entering the screen with everything already checked, or
+  // the server state still loading in, stays quiet).
   const canPromptAllDone = allDone && !isCompletedOcc && !isSkippedOcc;
+  const stepsReady = !isInstance || !instanceId || instanceStepsQuery.data !== undefined;
   const prevAllDoneRef = useRef<boolean | undefined>(undefined);
   useEffect(() => {
+    if (!stepsReady) {
+      prevAllDoneRef.current = undefined;
+      return;
+    }
     const prev = prevAllDoneRef.current;
     prevAllDoneRef.current = allDone;
     if (prev === false && canPromptAllDone) {
       setAllDonePrompt('auto');
     }
-  }, [allDone, canPromptAllDone]);
+  }, [stepsReady, allDone, canPromptAllDone]);
 
   // Leaving with every step checked but the task not marked done? Ask first.
   const handleBack = useCallback(() => {
@@ -806,9 +933,7 @@ export default function TaskViewScreen() {
         <View style={styles.progressWrap}>
           <View style={styles.progressLabelRow}>
             <Text style={styles.progressLabel}>
-              {/* A completed occurrence always reads as fully done — the local
-                  step checks are not persisted, so don't trust doneCount here. */}
-              {isCompletedOcc ? stepCount : doneCount} of {stepCount} steps done
+              {doneCount} of {stepCount} steps done
             </Text>
             {isCompletedOcc ? (
               <Ionicons name="checkmark-circle" size={22} color={colors.success} />
@@ -820,13 +945,7 @@ export default function TaskViewScreen() {
             <View
               style={[
                 styles.progressFill,
-                {
-                  width: `${
-                    stepCount
-                      ? ((isCompletedOcc ? stepCount : doneCount) / stepCount) * 100
-                      : 0
-                  }%`,
-                },
+                { width: `${stepCount ? (doneCount / stepCount) * 100 : 0}%` },
               ]}
             />
           </View>
@@ -872,13 +991,19 @@ export default function TaskViewScreen() {
                   completed={completedSteps.has(step.stepId)}
                   showCompletionControl={!isSkippedOcc}
                   checkReadOnly={isCompletedOcc}
-                  onToggleComplete={() => occKey && toggleOccurrenceStep(occKey, step.stepId)}
+                  onToggleComplete={() => void toggleStep(step.stepId)}
                   onOpenDetail={() =>
                     navigation.navigate('StepDetail', {
                       taskId,
                       stepId: step.stepId,
                       ...(isInstance
-                        ? { assignmentId, scheduledDate, scheduledTime }
+                        ? {
+                            assignmentId,
+                            scheduledDate,
+                            scheduledTime,
+                            instanceId,
+                            status: occStatus,
+                          }
                         : {}),
                     })
                   }

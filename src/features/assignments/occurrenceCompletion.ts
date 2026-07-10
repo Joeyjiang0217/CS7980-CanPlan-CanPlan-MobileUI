@@ -1,23 +1,21 @@
 /**
- * In-memory, UI-only step-completion store for calendar occurrences.
+ * In-memory, UI-only occurrence status overrides.
  *
- * Tracks which steps are checked off for a given occurrence
- * (assignment + scheduled date/time). This is intentionally NOT persisted —
- * it resets on reload — until the real backend wiring
- * (startTaskInstance / setTaskInstanceStepCompletion) is added later.
+ * When the user completes/skips/un-skips an occurrence, the new status is
+ * mirrored here so the calendar reflects it instantly, before the invalidated
+ * feed refetches. Step-level completion lives on the backend
+ * (TaskInstanceStep via setTaskInstanceStepCompletion).
  */
-import { useCallback, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 
 import type { TaskInstanceStatus } from '../../shared/api/canplanTypes';
 
-/** A user-applied status for a whole occurrence (UI-only, like the steps). */
+/** A user-applied status for a whole occurrence (UI-only). */
 export type OccurrenceStatus = Extract<
   TaskInstanceStatus,
   'IN_PROGRESS' | 'OVERDUE' | 'COMPLETED' | 'SKIPPED'
 >;
 
-const EMPTY: ReadonlySet<string> = new Set();
-const store = new Map<string, ReadonlySet<string>>();
 let statusSnapshot: ReadonlyMap<string, OccurrenceStatus> = new Map();
 let resolvedAtSnapshot: ReadonlyMap<string, string> = new Map();
 const listeners = new Set<() => void>();
@@ -40,24 +38,6 @@ export function occurrenceKey(
   scheduledTime: string,
 ): string {
   return `${assignmentId}#${scheduledDate}#${scheduledTime}`;
-}
-
-export function toggleOccurrenceStep(key: string, stepId: string) {
-  const current = store.get(key) ?? EMPTY;
-  const next = new Set(current);
-  if (next.has(stepId)) {
-    next.delete(stepId);
-  } else {
-    next.add(stepId);
-  }
-  store.set(key, next);
-  emit();
-}
-
-/** Subscribe to the completed-step set for one occurrence. */
-export function useCompletedSteps(key: string): ReadonlySet<string> {
-  const getSnapshot = useCallback(() => store.get(key) ?? EMPTY, [key]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function setOccurrenceStatus(
