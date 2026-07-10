@@ -1192,6 +1192,10 @@ function DayAssignmentsPage({
         {
           onSuccess: () => {
             setStartedKeys((current) => new Set(current).add(key));
+            // Starting releases the series frontier: mirror IN_PROGRESS into
+            // the in-memory overrides so the next occurrence turns live (and
+            // this card reflects its new state) before the feed refetches.
+            setOccurrenceStatus(key, 'IN_PROGRESS');
           },
           onError: (error) => {
             Alert.alert('Could not start this task', error.message);

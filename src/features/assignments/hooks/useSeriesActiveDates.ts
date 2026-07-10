@@ -7,9 +7,12 @@ import { useTaskInstanceViews } from './useAssignments';
 /** How far ahead we look for a series' next active (still-TODO) occurrence. */
 const ACTIVE_HORIZON_DAYS = 30;
 
-/** Statuses that keep an occurrence at the series "frontier" (still the live one). */
-const isActiveStatus = (status: TaskInstanceStatus) =>
-  status === 'TO_DO' || status === 'IN_PROGRESS';
+/**
+ * Statuses that keep an occurrence at the series "frontier" (still the live
+ * one). Only an untouched TO_DO holds the frontier: starting a task
+ * (IN_PROGRESS) releases it, so the next occurrence turns live right away.
+ */
+const isActiveStatus = (status: TaskInstanceStatus) => status === 'TO_DO';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const toISODate = (d: Date) =>
@@ -19,19 +22,21 @@ const toISODate = (d: Date) =>
  * Where an occurrence sits in its series' lifecycle — the single source of both
  * the calendar visuals and every screen's delete rules:
  *   active  → the one live occurrence (still TODO); delete this or this-and-future.
- *   settled → a finished/skipped/overdue/past occurrence; delete only itself.
+ *   settled → a started/finished/skipped/overdue/past occurrence.
  *   gray    → a projected day after the active one; inert — no tap, no delete.
  *
- * The frontier advances the moment the current occurrence leaves TODO (done,
- * skipped, OR overdue), which is exactly what promotes the next day from gray to
- * live.
+ * The frontier advances the moment the current occurrence leaves TODO (started,
+ * done, skipped, OR overdue), which is exactly what promotes the next day from
+ * gray to live. Note that materialized occurrences carry their own delete rule
+ * (never deletable) regardless of this state.
  */
 export type OccurrenceLifeState = 'settled' | 'active' | 'gray';
 
 /**
  * For each series, the "active" occurrence date: the earliest occurrence on or
- * after today that is still TODO/IN_PROGRESS. Everything before it has left TODO
- * (done/skipped/overdue → settled); everything after it is inert (gray).
+ * after today that is still an untouched TODO. Everything before it has left
+ * TODO (started/done/skipped/overdue → settled); everything after it is inert
+ * (gray).
  *
  * In-memory completion overrides layer on top of the server status so the
  * frontier advances the instant an occurrence is finished, before the feed

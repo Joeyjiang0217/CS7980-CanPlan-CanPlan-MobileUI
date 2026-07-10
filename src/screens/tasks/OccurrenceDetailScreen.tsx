@@ -145,9 +145,18 @@ export default function OccurrenceDetailScreen() {
     return formatActiveDuration(totalSeconds);
   }, [timedInstanceId, instance, nowTick]);
 
-  // Where this occurrence sits in its series decides what "delete" can do:
+  // Materialized occurrences can never be deleted — starting a task commits it
+  // (the start dialog says so), and done/skipped instances are settled records.
+  // Status overrides are only ever written after instance mutations, so any
+  // override present also means "materialized" before the feed refetch lands.
+  const statusOverride = overrides.get(occurrenceKey(assignmentId, scheduledDate, scheduledTime));
+  const isMaterialized =
+    Boolean(statusOverride) || (occurrence ? !occurrence.isVirtual : !route.params.isVirtual);
+
+  // For virtual occurrences, where this one sits in its series decides what
+  // "delete" can do:
   //   active  → this occurrence, or this and all future (manage the series);
-  //   completed / past → only this occurrence (a settled record);
+  //   past    → only this occurrence;
   //   gray    → nothing (a projected day after the active one — unreachable from
   //             the calendar, guarded here anyway).
   const activeDates = useSeriesActiveDates(ownerId);
@@ -157,13 +166,15 @@ export default function OccurrenceDetailScreen() {
     activeDate: activeDates.get(assignmentId),
     todayISO: todayISO(),
   });
-  const deleteMode: 'series' | 'occurrence' | 'whole' | 'none' = !isRecurring
-    ? 'whole'
-    : state === 'active'
-      ? 'series'
-      : state === 'gray'
-        ? 'none'
-        : 'occurrence';
+  const deleteMode: 'series' | 'occurrence' | 'whole' | 'none' = isMaterialized
+    ? 'none'
+    : !isRecurring
+      ? 'whole'
+      : state === 'active'
+        ? 'series'
+        : state === 'gray'
+          ? 'none'
+          : 'occurrence';
 
   const dateLabel = useMemo(() => formatLongDate(scheduledDate), [scheduledDate]);
   const firstDate = assignmentFirstDate(assignment);
@@ -250,7 +261,15 @@ export default function OccurrenceDetailScreen() {
           </View>
         </View>
 
-        {deleteMode === 'none' ? (
+        {isMaterialized ? (
+          <Text style={styles.noteText}>
+            {status === 'SKIPPED'
+              ? 'This is a settled record — it can’t be deleted, but you can un-skip it.'
+              : status === 'COMPLETED'
+                ? 'This is a settled record — it can no longer be deleted.'
+                : 'This task has been started — it can be skipped, but not deleted.'}
+          </Text>
+        ) : deleteMode === 'none' ? (
           <Text style={styles.noteText}>
             This occurrence isn’t active yet, so there’s nothing to change here. Step-by-step
             actions unlock on the day it’s scheduled.
