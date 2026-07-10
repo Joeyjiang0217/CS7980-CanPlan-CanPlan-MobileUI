@@ -9,6 +9,53 @@ import {
 
 type CoverRef = { taskId: string; assetId: string };
 
+/**
+ * Single-asset variant: resolves a square disk-cached cover thumbnail of the
+ * given pixel size, generating it from `sourceUri` on first use. Returns null
+ * until ready, so list rows never decode the full-size original.
+ */
+export function useCoverThumbnailUri(
+  assetId: string | null | undefined,
+  sourceUri: string | null | undefined,
+  size?: number,
+): string | null {
+  const [uri, setUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setUri(null);
+    if (!assetId) {
+      return;
+    }
+    void (async () => {
+      const cached = await getCachedCoverThumbnailUri(assetId, size);
+      if (!active) {
+        return;
+      }
+      if (cached) {
+        setUri(cached);
+        return;
+      }
+      if (!sourceUri) {
+        return;
+      }
+      try {
+        const generated = await ensureCoverThumbnailUri(assetId, sourceUri, size);
+        if (active) {
+          setUri(generated);
+        }
+      } catch {
+        // Best-effort: the row keeps its placeholder until a later render.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [assetId, sourceUri, size]);
+
+  return uri;
+}
+
 export function useCoverThumbnailUriMap(
   refs: ReadonlyArray<CoverRef>,
   sourceUriByTask: ReadonlyMap<string, string | null>,

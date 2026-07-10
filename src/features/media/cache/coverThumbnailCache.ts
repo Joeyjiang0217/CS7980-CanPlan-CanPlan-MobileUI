@@ -19,8 +19,8 @@ function safeIdFor(assetId: string): string {
   return assetId.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-function thumbnailPathFor(assetId: string): string {
-  return `${THUMB_DIR}${safeIdFor(assetId)}-${THUMB_SIZE}-${THUMB_CACHE_VERSION}.jpg`;
+function thumbnailPathFor(assetId: string, size: number): string {
+  return `${THUMB_DIR}${safeIdFor(assetId)}-${size}-${THUMB_CACHE_VERSION}.jpg`;
 }
 
 function previewPathFor(assetId: string): string {
@@ -49,9 +49,12 @@ function ensureDir(): Promise<void> {
 
 const inFlight = new Map<string, Promise<string>>();
 
-export async function getCachedCoverThumbnailUri(assetId: string): Promise<string | null> {
+export async function getCachedCoverThumbnailUri(
+  assetId: string,
+  size: number = THUMB_SIZE,
+): Promise<string | null> {
   if (!THUMB_DIR) return null;
-  const info = await getInfoAsync(thumbnailPathFor(assetId));
+  const info = await getInfoAsync(thumbnailPathFor(assetId, size));
   return info.exists ? info.uri : null;
 }
 
@@ -64,18 +67,20 @@ export async function getCachedCoverPreviewUri(assetId: string): Promise<string 
 export async function ensureCoverThumbnailUri(
   assetId: string,
   sourceUri: string,
+  size: number = THUMB_SIZE,
 ): Promise<string> {
   if (!THUMB_DIR) return sourceUri;
 
-  const cached = await getCachedCoverThumbnailUri(assetId);
+  const cached = await getCachedCoverThumbnailUri(assetId, size);
   if (cached) return cached;
 
-  const existing = inFlight.get(assetId);
+  const inFlightKey = `${assetId}:${size}`;
+  const existing = inFlight.get(inFlightKey);
   if (existing) return existing;
 
   const task = (async () => {
     await ensureDir();
-    const outputPath = thumbnailPathFor(assetId);
+    const outputPath = thumbnailPathFor(assetId, size);
     const localSourceUri = sourceUri.startsWith('http')
       ? (await downloadAsync(sourceUri, sourcePathFor(assetId))).uri
       : sourceUri;
@@ -95,7 +100,7 @@ export async function ensureCoverThumbnailUri(
             height: cropSize,
           },
         },
-        { resize: { width: THUMB_SIZE, height: THUMB_SIZE } },
+        { resize: { width: size, height: size } },
       ],
       { compress: 0.72, format: SaveFormat.JPEG },
     );
@@ -105,10 +110,10 @@ export async function ensureCoverThumbnailUri(
     }
     return outputPath;
   })().finally(() => {
-    inFlight.delete(assetId);
+    inFlight.delete(inFlightKey);
   });
 
-  inFlight.set(assetId, task);
+  inFlight.set(inFlightKey, task);
   return task;
 }
 

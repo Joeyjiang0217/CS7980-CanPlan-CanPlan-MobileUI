@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, PixelRatio, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useMediaDownloadUrl } from '../../features/media/hooks/useMedia';
+import { useCoverThumbnailUri } from '../../features/media/hooks/useCoverThumbnails';
 import type { Category, Task } from '../api/canplanTypes';
 import CachedImage from './CachedImage';
 import { colors, radius, shadow, spacing, typography } from '../theme/tokens';
@@ -12,9 +13,17 @@ interface TaskListItemProps {
   onPress: () => void;
 }
 
+// The 72pt cover box in physical pixels (e.g. 216 on a 3x display), so the
+// downscaled thumbnail is still pixel-sharp on screen.
+const LIST_THUMB_SIZE = PixelRatio.getPixelSizeForLayoutSize(72);
+
 export default function TaskListItem({ task, category, onPress }: TaskListItemProps) {
-  const coverImageQuery = useMediaDownloadUrl(task.taskId, task.coverImageAssetId ?? '');
-  const coverUri = coverImageQuery.data?.downloadUrl ?? null;
+  const assetId = task.coverImageAssetId ?? '';
+  const coverImageQuery = useMediaDownloadUrl(task.taskId, assetId);
+  const downloadUrl = coverImageQuery.data?.downloadUrl ?? null;
+  // Render the small disk-cached thumbnail instead of decoding the full-size
+  // original — same 72×72 display box, far cheaper to decode and lay out.
+  const coverUri = useCoverThumbnailUri(assetId || null, downloadUrl, LIST_THUMB_SIZE);
   const placeholderColor = category?.color?.trim() || colors.primary;
 
   return (
@@ -28,13 +37,13 @@ export default function TaskListItem({ task, category, onPress }: TaskListItemPr
         <CachedImage
           accessibilityLabel={`${task.title} cover photo`}
           uri={coverUri}
-          cacheKey={task.coverImageAssetId ?? ''}
+          cacheKey={`${assetId}:list-thumb-${LIST_THUMB_SIZE}`}
           style={styles.cover}
           contentFit="cover"
         />
       ) : (
         <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: placeholderColor }]}>
-          {coverImageQuery.isLoading ? (
+          {coverImageQuery.isLoading || Boolean(downloadUrl) ? (
             <ActivityIndicator color={colors.onPrimary} />
           ) : (
             <Ionicons name="image-outline" size={24} color={colors.onPrimary} />
