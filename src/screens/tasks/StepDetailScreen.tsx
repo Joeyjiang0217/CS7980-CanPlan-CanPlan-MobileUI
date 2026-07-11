@@ -51,6 +51,12 @@ type StepDetailRoute = RouteProp<MainStackParamList, 'StepDetail'>;
 
 /** How long the swipe counter stays visible after the last interaction. */
 const COUNTER_HIDE_DELAY_MS = 2500;
+/**
+ * How long a page must stay visible before its backend timer starts. Rapid
+ * consecutive check-offs skim pages faster than this, so skimmed pages never
+ * fire a start/pause pair — only the page the user settles on is timed.
+ */
+const TIMING_SETTLE_MS = 700;
 /** Height of the pull-up description area in the player sheet. */
 const PLAYER_DESC_HEIGHT = 260;
 /**
@@ -192,16 +198,23 @@ export default function StepDetailScreen() {
     isInstance && Boolean(instanceId) && status !== 'COMPLETED' && status !== 'SKIPPED';
   // Display-only variants use the swipeable "player" layout: template mode,
   // skipped occurrences, and unmaterialized (not yet started) to do/overdue
-  // occurrences. Materialized runner modes (to do / overdue with check-off,
-  // and done) keep the classic layout with the completion button.
-  const playerMode = !isInstance || !instanceId || status === 'SKIPPED';
+  // occurrences. Materialized to do/overdue occurrences (canToggle) use the
+  // same player chrome but check-driven: swiping is disabled and completing a
+  // step is the only way forward, so the visible page always equals the step
+  // being worked on (keeps the timing attribution clean). Done occurrences
+  // keep the classic read-only layout.
+  const displayPlayer = !isInstance || !instanceId || status === 'SKIPPED';
+  const runnerPlayer = canToggle;
+  const playerLayout = displayPlayer || runnerPlayer;
 
   // Cloud-first completion state, same as TaskViewScreen: the instance's step
-  // snapshot is the source of truth, with an optimistic flip while saving.
+  // snapshot is the source of truth. The runner player pages through steps in
+  // place, so optimistic flips are kept per step id rather than for a single
+  // route-pinned step.
   const [ownerId, setOwnerId] = useState('');
-  const [override, setOverride] = useState<boolean | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const [saveError, setSaveError] = useState<string>();
+  const savingStepsRef = useRef<Set<string>>(new Set());
   const stepToggle = useSetInstanceStepCompletion();
 
   useEffect(() => {
@@ -217,88 +230,32 @@ export default function StepDetailScreen() {
   }, []);
 
   const instanceStepsQuery = useInstanceSteps(ownerId, instanceId ?? '');
-  const serverCompleted = useMemo(() => {
+  const serverCompletedByStep = useMemo(() => {
+    const map: Record<string, boolean> = {};
     for (const page of instanceStepsQuery.data?.pages ?? []) {
       for (const item of page.items) {
-        if (item.stepId === stepId) {
-          return item.completed;
-        }
+        map[item.stepId] = item.completed;
       }
     }
-    return false;
-  }, [instanceStepsQuery.data, stepId]);
-  const completed = override ?? serverCompleted;
+    return map;
+  }, [instanceStepsQuery.data]);
 
-  // Drop the optimistic override once the refetched server state agrees.
+  // Drop optimistic overrides once the refetched server state agrees.
   useEffect(() => {
-    setOverride((current) => (current !== null && current === serverCompleted ? null : current));
-  }, [serverCompleted]);
-
-  // ── Server-side step timing ──────────────────────────────────────────────
-  // While this step is focused on a started (non-settled) occurrence, its
-  // backend timer runs. Leaving the screen or backgrounding/locking pauses it;
-  // returning resumes it. Already-completed steps are not timed (undoing one
-  // restarts the timer). Both mutations are idempotent and the timing is
-  // best-effort telemetry, so calls are fire-and-forget (no invalidation).
-  useEffect(() => {
-    if (!canToggle || !ownerId || !instanceId || completed) {
-      return;
-    }
-    const beginTiming = () => {
-      void startTaskInstanceStep({ userId: ownerId, instanceId, stepId }).catch(
-        (error: unknown) => {
-          if (__DEV__) {
-            console.warn('[step-timing] startTaskInstanceStep failed', error);
-          }
-        },
+    setOverrides((current) => {
+      const settled = Object.keys(current).filter(
+        (id) => serverCompletedByStep[id] === current[id],
       );
-    };
-    const pauseTiming = () => {
-      void pauseTaskInstanceTimer({ userId: ownerId, instanceId }).catch((error: unknown) => {
-        if (__DEV__) {
-          console.warn('[step-timing] pauseTaskInstanceTimer failed', error);
-        }
-      });
-    };
-    beginTiming();
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        beginTiming();
-      } else {
-        pauseTiming();
+      if (settled.length === 0) {
+        return current;
       }
+      const next = { ...current };
+      for (const id of settled) {
+        delete next[id];
+      }
+      return next;
     });
-    return () => {
-      subscription.remove();
-      pauseTiming();
-    };
-  }, [canToggle, ownerId, instanceId, stepId, completed]);
-
-  const toggleCompleted = useCallback(async () => {
-    if (!canToggle || !instanceId || !ownerId || saving) {
-      return;
-    }
-    const nextCompleted = !completed;
-    setSaveError(undefined);
-    setSaving(true);
-    setOverride(nextCompleted);
-    try {
-      await stepToggle.mutateAsync({
-        userId: ownerId,
-        instanceId,
-        stepId,
-        completed: nextCompleted,
-      });
-    } catch (error) {
-      // Roll the optimistic flip back and surface the failure.
-      setOverride(null);
-      setSaveError(
-        error instanceof Error ? error.message : 'Could not save this step. Please try again.',
-      );
-    } finally {
-      setSaving(false);
-    }
-  }, [canToggle, instanceId, ownerId, saving, completed, stepToggle, stepId]);
+  }, [serverCompletedByStep]);
 
   const taskQuery = useTask(taskId);
   const stepsQuery = useTaskSteps(taskId);
@@ -310,12 +267,76 @@ export default function StepDetailScreen() {
       ),
     [stepsQuery.data],
   );
-  // Player mode pages through steps in place; the classic layout stays pinned
-  // to the step the route opened.
+  // Player layouts page through steps in place; the classic layout stays
+  // pinned to the step the route opened.
   const routeIndex = steps.findIndex((s) => s.stepId === stepId);
   const [pagerIndex, setPagerIndex] = useState<number | null>(null);
-  const index = playerMode && pagerIndex !== null ? pagerIndex : routeIndex;
+  const index = playerLayout && pagerIndex !== null ? pagerIndex : routeIndex;
   const step = index >= 0 ? steps[index] : undefined;
+
+  const activeStepId = step?.stepId;
+  const stepCompleted = activeStepId
+    ? (overrides[activeStepId] ?? serverCompletedByStep[activeStepId] ?? false)
+    : false;
+
+  // ── Server-side step timing ──────────────────────────────────────────────
+  // The current page's step (not the route's) is the one being timed, and only
+  // while it is not completed on a started occurrence. A page must stay
+  // visible for TIMING_SETTLE_MS before its timer starts, so pages skimmed by
+  // rapid check-offs never produce timing calls. Leaving the screen or
+  // backgrounding/locking pauses a running timer; returning resumes it (after
+  // the same settle delay). Undoing a completed step restarts it. Both
+  // mutations are idempotent and the timing is best-effort telemetry, so calls
+  // are fire-and-forget (no invalidation).
+  useEffect(() => {
+    if (!canToggle || !ownerId || !instanceId || !activeStepId || stepCompleted) {
+      return;
+    }
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    let started = false;
+    const beginTiming = () => {
+      if (settleTimer !== null || started) {
+        return;
+      }
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        started = true;
+        void startTaskInstanceStep({ userId: ownerId, instanceId, stepId: activeStepId }).catch(
+          (error: unknown) => {
+            if (__DEV__) {
+              console.warn('[step-timing] startTaskInstanceStep failed', error);
+            }
+          },
+        );
+      }, TIMING_SETTLE_MS);
+    };
+    const cancelOrPause = () => {
+      if (settleTimer !== null) {
+        clearTimeout(settleTimer);
+        settleTimer = null;
+      }
+      if (started) {
+        started = false;
+        void pauseTaskInstanceTimer({ userId: ownerId, instanceId }).catch((error: unknown) => {
+          if (__DEV__) {
+            console.warn('[step-timing] pauseTaskInstanceTimer failed', error);
+          }
+        });
+      }
+    };
+    beginTiming();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        beginTiming();
+      } else {
+        cancelOrPause();
+      }
+    });
+    return () => {
+      subscription.remove();
+      cancelOrPause();
+    };
+  }, [canToggle, ownerId, instanceId, activeStepId, stepCompleted]);
 
   const visual = useMemo(
     () => step?.mediaAssets.find((a) => a.type === 'IMAGE'),
@@ -360,7 +381,7 @@ export default function StepDetailScreen() {
   // As the player pages, report the current step to the TaskView beneath us
   // (via its route params) so its list re-centres before we navigate back.
   useEffect(() => {
-    if (!playerMode || !step) {
+    if (!playerLayout || !step) {
       return;
     }
     const state = navigation.getState();
@@ -371,7 +392,7 @@ export default function StepDetailScreen() {
         source: previousRoute.key,
       });
     }
-  }, [playerMode, step, navigation]);
+  }, [playerLayout, step, navigation]);
 
   const togglePlayback = useCallback(() => {
     if (!step) {
@@ -426,7 +447,7 @@ export default function StepDetailScreen() {
 
   const stepsLoaded = steps.length > 0;
   useEffect(() => {
-    if (playerMode && stepsLoaded) {
+    if (playerLayout && stepsLoaded) {
       showCounter();
     }
     return () => {
@@ -434,7 +455,7 @@ export default function StepDetailScreen() {
         clearTimeout(counterTimerRef.current);
       }
     };
-  }, [playerMode, stepsLoaded, showCounter]);
+  }, [playerLayout, stepsLoaded, showCounter]);
 
   // While an arrow-triggered scroll animates, live onScroll tracking is
   // suppressed — otherwise it would report the still-current page and flicker
@@ -493,6 +514,65 @@ export default function StepDetailScreen() {
     [index, steps.length, windowWidth, driverX, driverActive, onDriverSettled, showCounter],
   );
 
+  // In the runner player, the check button completes the current step and
+  // advances to the next page (or back to the step list after the last step,
+  // where TaskView's "All steps done!" prompt takes over). The flip is
+  // optimistic: on failure we stay on the advanced page, surface the error,
+  // and the step stays incomplete on the server. On an already-completed page
+  // the button is an undo instead — it stays put and restarts the timer.
+  const checkCurrentStep = useCallback(async () => {
+    if (!canToggle || !instanceId || !ownerId || !activeStepId) {
+      return;
+    }
+    // Re-entry guard: blocks a double-tap on the same page while its mutation
+    // is in flight. Checks on subsequent pages are separate steps and pass.
+    if (savingStepsRef.current.has(activeStepId)) {
+      return;
+    }
+    savingStepsRef.current.add(activeStepId);
+    const nextCompleted = !stepCompleted;
+    setSaveError(undefined);
+    setOverrides((current) => ({ ...current, [activeStepId]: nextCompleted }));
+    if (nextCompleted) {
+      if (index < steps.length - 1) {
+        goToStep(1);
+      } else {
+        navigation.goBack();
+      }
+    }
+    try {
+      await stepToggle.mutateAsync({
+        userId: ownerId,
+        instanceId,
+        stepId: activeStepId,
+        completed: nextCompleted,
+      });
+    } catch (error) {
+      // Roll the optimistic flip back and surface the failure.
+      setOverrides((current) => {
+        const next = { ...current };
+        delete next[activeStepId];
+        return next;
+      });
+      setSaveError(
+        error instanceof Error ? error.message : 'Could not save this step. Please try again.',
+      );
+    } finally {
+      savingStepsRef.current.delete(activeStepId);
+    }
+  }, [
+    canToggle,
+    instanceId,
+    ownerId,
+    activeStepId,
+    stepCompleted,
+    index,
+    steps.length,
+    goToStep,
+    navigation,
+    stepToggle,
+  ]);
+
   const isLoading = taskQuery.isLoading || stepsQuery.isLoading;
 
   if (isLoading) {
@@ -522,7 +602,7 @@ export default function StepDetailScreen() {
 
   const task = taskQuery.data;
 
-  if (playerMode) {
+  if (playerLayout) {
     return (
       <View style={styles.root}>
         <View style={[styles.playerHeader, { paddingTop: insets.top + spacing.sm }]}>
@@ -539,6 +619,9 @@ export default function StepDetailScreen() {
             keyExtractor={(item) => item.stepId}
             horizontal
             pagingEnabled
+            // The runner player is check-driven: the visible page must always
+            // be the step being worked on, so free swiping is disabled.
+            scrollEnabled={displayPlayer}
             showsHorizontalScrollIndicator={false}
             initialScrollIndex={index}
             getItemLayout={(_, i) => ({
@@ -586,9 +669,14 @@ export default function StepDetailScreen() {
           </Animated.View>
         </View>
 
+        {runnerPlayer && saveError ? (
+          <Text accessibilityRole="alert" style={styles.playerSaveError}>
+            {saveError}
+          </Text>
+        ) : null}
         <View style={[styles.playerBar, { paddingBottom: insets.bottom + spacing.md }]}>
           <View style={styles.playerBarSlot}>
-            {index > 0 ? (
+            {displayPlayer && index > 0 ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Previous step"
@@ -596,6 +684,20 @@ export default function StepDetailScreen() {
                 style={({ pressed }) => [styles.playerNavButton, pressed ? styles.pressed : null]}
               >
                 <Ionicons name="chevron-back" size={30} color={colors.text} />
+              </Pressable>
+            ) : null}
+            {runnerPlayer && stepCompleted ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Undo — mark step not done"
+                onPress={() => void checkCurrentStep()}
+                style={({ pressed }) => [
+                  styles.playerCheckButton,
+                  styles.playerUndoButton,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                <Ionicons name="arrow-undo" size={26} color={colors.danger} />
               </Pressable>
             ) : null}
           </View>
@@ -617,7 +719,29 @@ export default function StepDetailScreen() {
             />
           </Pressable>
           <View style={styles.playerBarSlot}>
-            {index < steps.length - 1 ? (
+            {displayPlayer && index < steps.length - 1 ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Next step"
+                onPress={() => goToStep(1)}
+                style={({ pressed }) => [styles.playerNavButton, pressed ? styles.pressed : null]}
+              >
+                <Ionicons name="chevron-forward" size={30} color={colors.text} />
+              </Pressable>
+            ) : null}
+            {runnerPlayer && !stepCompleted ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Mark step done and go to next"
+                onPress={() => void checkCurrentStep()}
+                style={({ pressed }) => [styles.playerCheckButton, pressed ? styles.pressed : null]}
+              >
+                <Ionicons name="checkmark" size={30} color={colors.onPrimary} />
+              </Pressable>
+            ) : null}
+            {runnerPlayer && stepCompleted && index < steps.length - 1 ? (
+              // A page can already be checked (done out of order from the
+              // list); with swiping disabled, this is the way past it.
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Next step"
@@ -689,40 +813,6 @@ export default function StepDetailScreen() {
           </Pressable>
         </View>
       </ScrollView>
-
-      {canToggle ? (
-        <View
-          style={[styles.doneArea, { marginBottom: insets.bottom + spacing.lg }]}
-          pointerEvents="box-none"
-        >
-          {saveError ? (
-            <Text accessibilityRole="alert" style={styles.saveError}>
-              {saveError}
-            </Text>
-          ) : null}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={completed ? 'Mark step not done' : 'Mark step done'}
-            accessibilityState={{ disabled: saving }}
-            disabled={saving}
-            onPress={() => void toggleCompleted()}
-            style={({ pressed }) => [
-              styles.doneButton,
-              completed ? styles.undoButton : styles.markDoneButton,
-              pressed ? styles.pressed : null,
-            ]}
-          >
-            <Ionicons
-              name={completed ? 'arrow-undo' : 'checkmark'}
-              size={20}
-              color={completed ? colors.danger : colors.onPrimary}
-            />
-            <Text style={[styles.doneText, completed ? styles.undoText : styles.markDoneText]}>
-              {saving ? 'Saving…' : completed ? 'Undo — not done yet' : 'Mark as done'}
-            </Text>
-          </Pressable>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -851,6 +941,26 @@ const styles = StyleSheet.create({
   playerSpeakerButtonActive: {
     backgroundColor: colors.primary,
   },
+  playerCheckButton: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    ...shadow.card,
+  },
+  playerUndoButton: {
+    backgroundColor: '#FDE7E7',
+  },
+  playerSaveError: {
+    ...typography.body,
+    color: colors.danger,
+    textAlign: 'center',
+    backgroundColor: colors.bg,
+    paddingTop: spacing.md,
+    paddingHorizontal: spacing.xl,
+  },
   // ── Classic (instance runner) layout ──────────────────────────────────────
   hero: {
     width: '100%',
@@ -930,42 +1040,6 @@ const styles = StyleSheet.create({
   listenText: {
     ...typography.button,
     color: colors.primary,
-  },
-  doneArea: {
-    position: 'absolute',
-    left: spacing.xl,
-    right: spacing.xl,
-    bottom: 0,
-    gap: spacing.sm,
-  },
-  saveError: {
-    ...typography.body,
-    color: colors.danger,
-    textAlign: 'center',
-  },
-  doneButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    minHeight: 56,
-    borderRadius: radius.lg,
-    ...shadow.card,
-  },
-  markDoneButton: {
-    backgroundColor: colors.primary,
-  },
-  undoButton: {
-    backgroundColor: '#FDE7E7',
-  },
-  doneText: {
-    ...typography.button,
-  },
-  markDoneText: {
-    color: colors.onPrimary,
-  },
-  undoText: {
-    color: colors.danger,
   },
   pressed: {
     opacity: 0.72,
