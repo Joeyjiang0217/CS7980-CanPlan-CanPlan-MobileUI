@@ -5,6 +5,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExterna
 import {
   Alert,
   Animated,
+  AppState,
   Easing,
   FlatList,
   InteractionManager,
@@ -17,6 +18,7 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
+import { runOnJS, useFrameCallback, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useQueryClient } from '@tanstack/react-query';
@@ -148,6 +150,59 @@ const DAY_PAGER_PAGE_COUNT = 21;
 const DAY_PAGER_REBASE_EDGE = 3;
 const dayPagerIndexForDate = (date: Date, weekStartDate: Date) =>
   daysBetween(date, weekStartDate) + DAY_PAGER_SIDE_BUFFER;
+
+/** Local calendar day as one comparable number, usable on both threads. */
+const localDayKey = (d: Date) => {
+  'worklet';
+  return d.getFullYear() * 10_000 + d.getMonth() * 100 + d.getDate();
+};
+
+/**
+ * Today's date, kept current while mounted. A mounted-at-time snapshot goes
+ * stale when the app sleeps (or stays open) past midnight, leaving the red
+ * "today" marker, Start buttons, runner-vs-preview routing, and to do/overdue
+ * bucketing keyed to yesterday until a full reload.
+ *
+ * The watcher deliberately avoids JS timers: React Native schedules those
+ * against the wall clock (RCTTiming targets are NSDates), so a backwards
+ * clock change leaves every pending timer — setInterval and rAF included —
+ * frozen until the clock catches back up to the old deadline. A Reanimated
+ * frame callback instead compares the day key once per UI-thread frame:
+ * display links are vsync-driven and immune to clock changes, and they pause
+ * and resume with the app's foreground state. The JS thread is only woken
+ * when the calendar day actually changes, so re-renders (and all downstream
+ * recomputes) stay day-boundary-only. The AppState listener is belt and
+ * braces for the highest-stakes production path — first frame after an
+ * overnight background resume.
+ */
+function useToday(): Date {
+  const [today, setToday] = useState(() => new Date());
+  const refresh = useCallback(() => {
+    const now = new Date();
+    setToday((current) => (isSameDay(current, now) ? current : now));
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        refresh();
+      }
+    });
+    return () => subscription.remove();
+  }, [refresh]);
+
+  const watchedDayKey = useSharedValue(localDayKey(today));
+  useFrameCallback(() => {
+    'worklet';
+    const key = localDayKey(new Date());
+    if (watchedDayKey.value !== key) {
+      watchedDayKey.value = key;
+      runOnJS(refresh)();
+    }
+  });
+
+  return today;
+}
 
 const calendarMountedDays = new Map<string, ReadonlySet<string>>();
 const calendarMountedDayListeners = new Set<() => void>();
@@ -1470,7 +1525,7 @@ export default function CalendarScreen() {
     };
   }, []);
 
-  const today = useMemo(() => new Date(), []);
+  const today = useToday();
   const selectedISO = toISODate(selected);
 
   const dayViewsQuery = useTaskInstanceViews(ownerId, selectedISO, selectedISO);
