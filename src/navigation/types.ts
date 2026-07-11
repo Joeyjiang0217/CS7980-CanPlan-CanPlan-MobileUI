@@ -63,6 +63,8 @@ export type MainStackParamList = {
     instanceId?: string;
     /** The occurrence's current status, so the runner can gate done/skip/overdue. */
     status?: TaskInstanceStatus;
+    /** Set by the step player as it pages, so the list re-centres on return. */
+    focusStepId?: string;
   };
   TaskDetail: { taskId: string };
   /** Single-step focus view. Occurrence fields enable the done/undo toggle. */

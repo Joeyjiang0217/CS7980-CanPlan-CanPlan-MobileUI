@@ -812,6 +812,31 @@ export default function TaskViewScreen() {
     [],
   );
 
+  // The step player (StepDetail) reports the step it's showing via
+  // `focusStepId` as the user pages, so this list re-centres on that card
+  // before they navigate back. Layouts are captured per card wrapper.
+  const scrollRef = useRef<ScrollView>(null);
+  const viewportHeightRef = useRef(0);
+  const stepListYRef = useRef(0);
+  const stepLayoutsRef = useRef(new Map<string, { y: number; height: number }>());
+  const focusStepId = route.params.focusStepId;
+  useEffect(() => {
+    if (!focusStepId) {
+      return;
+    }
+    const item = stepLayoutsRef.current.get(focusStepId);
+    if (!item) {
+      return;
+    }
+    const centeredY = Math.max(
+      0,
+      stepListYRef.current + item.y - Math.max(0, (viewportHeightRef.current - item.height) / 2),
+    );
+    // No animation: this runs while the player is still on top, so the list
+    // is already in place the moment the user returns.
+    scrollRef.current?.scrollTo({ y: centeredY, animated: false });
+  }, [focusStepId]);
+
   const stepCount = steps.length;
   const allDone = isInstance && stepCount > 0 && doneCount === stepCount;
   const isLoading =
@@ -968,6 +993,10 @@ export default function TaskViewScreen() {
 
       <View style={styles.scrollArea}>
         <ScrollView
+          ref={scrollRef}
+          onLayout={(event) => {
+            viewportHeightRef.current = event.nativeEvent.layout.height;
+          }}
           contentContainerStyle={[
             styles.content,
             { paddingBottom: insets.bottom + spacing.xxl },
@@ -991,10 +1020,23 @@ export default function TaskViewScreen() {
               <Text style={styles.emptyText}>This task doesn’t have any steps.</Text>
             </View>
           ) : (
-            <View style={styles.stepList}>
+            <View
+              style={styles.stepList}
+              onLayout={(event) => {
+                stepListYRef.current = event.nativeEvent.layout.y;
+              }}
+            >
               {steps.map((step, index) => (
-                <StepCard
+                <View
                   key={step.stepId}
+                  onLayout={(event) => {
+                    stepLayoutsRef.current.set(step.stepId, {
+                      y: event.nativeEvent.layout.y,
+                      height: event.nativeEvent.layout.height,
+                    });
+                  }}
+                >
+                <StepCard
                   taskId={taskId}
                   step={step}
                   index={index}
@@ -1022,6 +1064,7 @@ export default function TaskViewScreen() {
                     })
                   }
                 />
+                </View>
               ))}
             </View>
           )}
