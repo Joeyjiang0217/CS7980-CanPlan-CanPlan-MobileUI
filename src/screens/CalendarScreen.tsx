@@ -39,7 +39,9 @@ import {
 } from '../features/assignments/hooks/useSeriesActiveDates';
 import {
   occurrenceKey,
+  setOccurrenceInstanceId,
   setOccurrenceStatus,
+  useOccurrenceInstanceIds,
   useOccurrenceResolvedAt,
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
@@ -1222,15 +1224,16 @@ function DayAssignmentsPage({
   const instancesQuery = useTaskInstances(iso, iso);
   const statusOverrides = useOccurrenceStatuses();
   const resolvedAtOverrides = useOccurrenceResolvedAt();
+  const instanceIdOverrides = useOccurrenceInstanceIds();
 
   // Explicit start flow: pressing a card's To Do / "Start now" control asks for
   // confirmation (starting forfeits delete — only skip remains), then
-  // materializes the occurrence. `startedKeys` bridges the gap until the
-  // invalidated feed refetch reports the occurrence as non-virtual.
+  // materializes the occurrence and opens it. The in-memory overrides bridge
+  // the gap until the invalidated feed refetch reports the occurrence as
+  // non-virtual with its instanceId.
   const startInstance = useStartTaskInstance();
   const [startTarget, setStartTarget] = useState<TaskInstanceView | null>(null);
   const [startingKeys, setStartingKeys] = useState<ReadonlySet<string>>(new Set());
-  const [startedKeys, setStartedKeys] = useState<ReadonlySet<string>>(new Set());
 
   const confirmStart = useCallback(
     (view: TaskInstanceView) => {
@@ -1245,12 +1248,29 @@ function DayAssignmentsPage({
           scheduledTime: view.scheduledTime,
         },
         {
-          onSuccess: () => {
-            setStartedKeys((current) => new Set(current).add(key));
-            // Starting releases the series frontier: mirror IN_PROGRESS into
-            // the in-memory overrides so the next occurrence turns live (and
-            // this card reflects its new state) before the feed refetches.
-            setOccurrenceStatus(key, 'IN_PROGRESS');
+          onSuccess: (instance) => {
+            // Starting releases the series frontier: mirror the materialized
+            // instanceId and status into the in-memory overrides so the next
+            // occurrence turns live and taps open the materialized view
+            // before the feed refetches. Past-due occurrences stay OVERDUE —
+            // the server derives the same, and mirroring IN_PROGRESS would
+            // wrongly move the card into the To Do bucket (same derivation as
+            // un-skip in TaskViewScreen).
+            setOccurrenceInstanceId(key, instance.instanceId);
+            const scheduledMs = new Date(view.scheduledFor).getTime();
+            setOccurrenceStatus(
+              key,
+              Number.isFinite(scheduledMs) && Date.now() > scheduledMs
+                ? 'OVERDUE'
+                : 'IN_PROGRESS',
+            );
+            // Starting means "I'm doing this now" — go straight to the runner.
+            onOpen({
+              ...view,
+              instanceId: instance.instanceId,
+              status: instance.status,
+              isVirtual: false,
+            });
           },
           onError: (error) => {
             Alert.alert('Could not start this task', error.message);
@@ -1265,7 +1285,7 @@ function DayAssignmentsPage({
         },
       );
     },
-    [ownerId, startInstance],
+    [ownerId, startInstance, onOpen],
   );
 
   // "All done!" tap: every step is already complete on the backend, so a single
@@ -1276,13 +1296,14 @@ function DayAssignmentsPage({
   const [finishingKeys, setFinishingKeys] = useState<ReadonlySet<string>>(new Set());
   const markDone = useCallback(
     (view: TaskInstanceView) => {
-      if (!view.instanceId) {
+      const key = occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime);
+      const instanceId = view.instanceId ?? instanceIdOverrides.get(key);
+      if (!instanceId) {
         return;
       }
-      const key = occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime);
       setFinishingKeys((current) => new Set(current).add(key));
       updateStatus.mutate(
-        { userId: ownerId, instanceId: view.instanceId, status: 'COMPLETED' },
+        { userId: ownerId, instanceId, status: 'COMPLETED' },
         {
           onSuccess: () => {
             setOccurrenceStatus(key, 'COMPLETED');
@@ -1300,7 +1321,7 @@ function DayAssignmentsPage({
         },
       );
     },
-    [ownerId, updateStatus],
+    [ownerId, updateStatus, instanceIdOverrides],
   );
 
   const instanceResolvedAtByKey = useMemo(() => {
@@ -1429,7 +1450,7 @@ function DayAssignmentsPage({
           isRecurring={isRecurring}
           repeatLabel={isRecurring ? describeRepeat(assignment) : undefined}
           todayISO={todayISO}
-          started={!view.isVirtual || startedKeys.has(key)}
+          started={!view.isVirtual || instanceIdOverrides.has(key)}
           starting={startingKeys.has(key)}
           finishing={finishingKeys.has(key)}
           onStart={() => setStartTarget(view)}
@@ -1451,7 +1472,7 @@ function DayAssignmentsPage({
       onOpen,
       ownerId,
       resolvedAtOverrides,
-      startedKeys,
+      instanceIdOverrides,
       startingKeys,
       statusOverrides,
       todayISO,
@@ -1577,6 +1598,7 @@ export default function CalendarScreen() {
   // UI-only status overrides (mark done / skip from the runner) win over the
   // server status so the occurrence moves buckets within the session.
   const statusOverrides = useOccurrenceStatuses();
+  const instanceIdOverrides = useOccurrenceInstanceIds();
   const buckets = useMemo(() => {
     const result: Record<StatusKey, TaskInstanceView[]> = {
       overdue: [],
@@ -1733,6 +1755,13 @@ export default function CalendarScreen() {
 
   const openOccurrence = useCallback(
     (view: TaskInstanceView) => {
+      // The views feed can lag a just-made start or status change (the chip
+      // already flipped via the in-memory overrides, but the cached view still
+      // says virtual/TO_DO) — resolve through the overrides so a tap in that
+      // window opens the materialized state, not the stale one.
+      const key = occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime);
+      const instanceId = view.instanceId ?? instanceIdOverrides.get(key);
+      const status = statusOverrides.get(key) ?? view.status;
       // Future occurrences are preview-only → occurrence detail. Today/past open
       // the step "runner" (TaskView in instance mode).
       if (view.scheduledDate > toISODate(today)) {
@@ -1742,8 +1771,8 @@ export default function CalendarScreen() {
           taskTitle: view.title,
           scheduledDate: view.scheduledDate,
           scheduledTime: view.scheduledTime,
-          status: view.status,
-          isVirtual: view.isVirtual,
+          status,
+          isVirtual: view.isVirtual && !instanceId,
         });
       } else {
         navigation.navigate('TaskView', {
@@ -1752,12 +1781,12 @@ export default function CalendarScreen() {
           scheduledDate: view.scheduledDate,
           scheduledTime: view.scheduledTime,
           scheduledFor: view.scheduledFor,
-          instanceId: view.instanceId ?? undefined,
-          status: view.status,
+          instanceId,
+          status,
         });
       }
     },
-    [navigation, today],
+    [navigation, today, instanceIdOverrides, statusOverrides],
   );
 
   const weekStart = useMemo(() => startOfWeek(visualSelected), [visualSelected]);

@@ -18,6 +18,7 @@ export type OccurrenceStatus = Extract<
 
 let statusSnapshot: ReadonlyMap<string, OccurrenceStatus> = new Map();
 let resolvedAtSnapshot: ReadonlyMap<string, string> = new Map();
+let instanceIdSnapshot: ReadonlyMap<string, string> = new Map();
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -70,6 +71,31 @@ export function clearOccurrenceStatus(key: string) {
   nextResolvedAt.delete(key);
   resolvedAtSnapshot = nextResolvedAt;
   emit();
+}
+
+/**
+ * Record the instanceId a start (materialize) call returned, so taps that land
+ * before the invalidated feed refetch still open the materialized view instead
+ * of the stale virtual one. An occurrence's instanceId never changes, so
+ * entries are write-once and never cleared.
+ */
+export function setOccurrenceInstanceId(key: string, instanceId: string) {
+  if (instanceIdSnapshot.get(key) === instanceId) {
+    return;
+  }
+  const next = new Map(instanceIdSnapshot);
+  next.set(key, instanceId);
+  instanceIdSnapshot = next;
+  emit();
+}
+
+/** Subscribe to instanceIds recorded by materializations this session. */
+export function useOccurrenceInstanceIds(): ReadonlyMap<string, string> {
+  return useSyncExternalStore(
+    subscribe,
+    () => instanceIdSnapshot,
+    () => instanceIdSnapshot,
+  );
 }
 
 /** Subscribe to the whole map of occurrence status overrides. */
