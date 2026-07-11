@@ -278,7 +278,7 @@ function StepCard({
                 style={styles.stepMedia}
                 contentFit="cover"
               />
-              {isInstance && showCompletionControl && completed ? (
+              {isInstance && completed ? (
                 <View style={styles.completedOverlay}>
                   <View style={styles.completedCheck}>
                     <Ionicons name="checkmark" size={32} color={colors.onPrimary} />
@@ -391,15 +391,17 @@ function StepCard({
           onPress={onOpenDetail}
           style={styles.stepRowMain}
         >
-          <View style={[styles.stepNumber, isInstance && showCompletionControl && completed ? styles.stepNumberDone : null]}>
-            {isInstance && showCompletionControl && completed ? (
+          {/* Completed styling is display-only and independent of whether the
+              toggle control is offered (skipped views show state, no actions). */}
+          <View style={[styles.stepNumber, isInstance && completed ? styles.stepNumberDone : null]}>
+            {isInstance && completed ? (
               <Ionicons name="checkmark" size={20} color={colors.onPrimary} />
             ) : (
               <Text style={styles.stepNumberText}>{index + 1}</Text>
             )}
           </View>
           <Text
-            style={[styles.stepTitle, isInstance && showCompletionControl && completed ? styles.stepTitleDone : null]}
+            style={[styles.stepTitle, isInstance && completed ? styles.stepTitleDone : null]}
           >
             {step.text}
           </Text>
@@ -968,7 +970,11 @@ export default function TaskViewScreen() {
         )}
       </View>
 
-      {isInstance && stepCount > 0 && !isSkippedOcc && isMaterialized ? (
+      {/* Skipped occurrence: un-skip is the only action offered; the progress
+          bar and list below are a read-only record of what was done. */}
+      {isSkippedOcc ? <View style={styles.unskipBar}>{unskipControl}</View> : null}
+
+      {isInstance && stepCount > 0 && isMaterialized ? (
         <View style={styles.progressWrap}>
           <View style={styles.progressLabelRow}>
             <Text style={styles.progressLabel}>
@@ -1000,7 +1006,6 @@ export default function TaskViewScreen() {
           contentContainerStyle={[
             styles.content,
             { paddingBottom: insets.bottom + spacing.xxl },
-            isSkippedOcc ? styles.contentUnderUnskip : null,
           ]}
           showsVerticalScrollIndicator={false}
         >
@@ -1101,9 +1106,6 @@ export default function TaskViewScreen() {
             </Text>
           ) : null}
         </ScrollView>
-
-        {/* Skipped occurrence: the un-skip control floats above the scrolling steps. */}
-        {isSkippedOcc ? <View style={styles.unskipFloat}>{unskipControl}</View> : null}
 
       </View>
 
@@ -1225,16 +1227,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   // Floating un-skip pill pinned over the top of the scrolling step list.
-  unskipFloat: {
-    position: 'absolute',
-    top: 0,
-    left: spacing.xl,
-    right: spacing.xl,
-  },
-  // Clears the floating un-skip pill (56px tall) so content starts below it,
-  // matching the old in-flow spacing (spacer + list gap).
-  contentUnderUnskip: {
-    paddingTop: 56 + spacing.lg * 2,
+  // Skipped occurrence: un-skip sits statically between the header and the
+  // progress bar, above the scrolling read-only step record.
+  unskipBar: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.sm,
   },
   // Dialog-shaped "list time isn't tracked" reminder. Floats over the screen
   // center like ConfirmDialog but has no backdrop and auto-hides.

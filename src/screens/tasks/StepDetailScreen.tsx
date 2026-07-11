@@ -49,6 +49,8 @@ import { colors, radius, shadow, spacing, typography } from '../../shared/theme/
 type StepDetailNavigation = NativeStackNavigationProp<MainStackParamList, 'StepDetail'>;
 type StepDetailRoute = RouteProp<MainStackParamList, 'StepDetail'>;
 
+/** Done-state teal, matching the step list's completed circles (TaskViewScreen). */
+const TEAL = '#3DB8AD';
 /** How long the swipe counter stays visible after the last interaction. */
 const COUNTER_HIDE_DELAY_MS = 2500;
 /**
@@ -79,10 +81,13 @@ function PlayerStepPage({
   taskId,
   step,
   width,
+  completed,
 }: {
   taskId: string;
   step: TaskStep;
   width: number;
+  /** Shows the done badge next to the title (instance pages with check data). */
+  completed?: boolean;
 }) {
   const visual = useMemo(
     () => step.mediaAssets.find((a) => a.type === 'IMAGE'),
@@ -167,7 +172,14 @@ function PlayerStepPage({
           style={styles.playerSheetHandle}
         >
           {hasDescription ? <View style={styles.playerSheetGrabber} /> : null}
-          <Text style={styles.playerSheetTitle}>{step.text}</Text>
+          <View style={styles.playerSheetTitleRow}>
+            {completed ? (
+              <View accessibilityLabel="Step done" style={styles.playerSheetCheck}>
+                <Ionicons name="checkmark" size={18} color={colors.onPrimary} />
+              </View>
+            ) : null}
+            <Text style={styles.playerSheetTitle}>{step.text}</Text>
+          </View>
         </View>
         {hasDescription ? (
           <View style={styles.playerSheetBody}>
@@ -656,7 +668,12 @@ export default function StepDetailScreen() {
               }
             }}
             renderItem={({ item }) => (
-              <PlayerStepPage taskId={taskId} step={item} width={windowWidth} />
+              <PlayerStepPage
+                taskId={taskId}
+                step={item}
+                width={windowWidth}
+                completed={overrides[item.stepId] ?? serverCompletedByStep[item.stepId] ?? false}
+              />
             )}
           />
           <Animated.View
@@ -894,11 +911,26 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: 'rgba(255,255,255,0.45)',
   },
+  playerSheetTitleRow: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  playerSheetCheck: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TEAL,
+  },
   playerSheetTitle: {
     ...typography.heading,
     fontSize: 24,
     color: colors.onPrimary,
-    textAlign: 'center',
+    flexShrink: 1,
+    textAlign: 'left',
   },
   playerSheetBody: {
     height: PLAYER_DESC_HEIGHT,
