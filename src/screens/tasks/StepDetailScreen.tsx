@@ -208,16 +208,14 @@ export default function StepDetailScreen() {
   // completed/skipped occurrences are read-only here, matching the step list.
   const canToggle =
     isInstance && Boolean(instanceId) && status !== 'COMPLETED' && status !== 'SKIPPED';
-  // Display-only variants use the swipeable "player" layout: template mode,
-  // skipped occurrences, and unmaterialized (not yet started) to do/overdue
-  // occurrences. Materialized to do/overdue occurrences (canToggle) use the
-  // same player chrome but check-driven: swiping is disabled and completing a
-  // step is the only way forward, so the visible page always equals the step
-  // being worked on (keeps the timing attribution clean). Done occurrences
-  // keep the classic read-only layout.
-  const displayPlayer = !isInstance || !instanceId || status === 'SKIPPED';
+  // Every path is the "player". Display-only variants (template mode, skipped
+  // and done occurrences, unmaterialized to do/overdue) keep free swiping with
+  // arrows; materialized to do/overdue occurrences (canToggle) are
+  // check-driven instead: swiping is disabled and completing a step is the
+  // only way forward, so the visible page always equals the step being worked
+  // on (keeps the timing attribution clean).
   const runnerPlayer = canToggle;
-  const playerLayout = displayPlayer || runnerPlayer;
+  const displayPlayer = !runnerPlayer;
 
   // Cloud-first completion state, same as TaskViewScreen: the instance's step
   // snapshot is the source of truth. The runner player pages through steps in
@@ -279,11 +277,10 @@ export default function StepDetailScreen() {
       ),
     [stepsQuery.data],
   );
-  // Player layouts page through steps in place; the classic layout stays
-  // pinned to the step the route opened.
+  // The pager pages through steps in place; the route only picks the start.
   const routeIndex = steps.findIndex((s) => s.stepId === stepId);
   const [pagerIndex, setPagerIndex] = useState<number | null>(null);
-  const index = playerLayout && pagerIndex !== null ? pagerIndex : routeIndex;
+  const index = pagerIndex !== null ? pagerIndex : routeIndex;
   const step = index >= 0 ? steps[index] : undefined;
 
   const activeStepId = step?.stepId;
@@ -350,15 +347,10 @@ export default function StepDetailScreen() {
     };
   }, [canToggle, ownerId, instanceId, activeStepId, stepCompleted]);
 
-  const visual = useMemo(
-    () => step?.mediaAssets.find((a) => a.type === 'IMAGE'),
-    [step],
-  );
   const audio = useMemo(
     () => step?.mediaAssets.find((a) => a.type === 'AUDIO'),
     [step],
   );
-  const visualUri = useCachedMediaUri(taskId, visual);
   const audioUri = useCachedMediaUri(taskId, audio);
   const hasAudio = Boolean(audio);
 
@@ -393,7 +385,7 @@ export default function StepDetailScreen() {
   // As the player pages, report the current step to the TaskView beneath us
   // (via its route params) so its list re-centres before we navigate back.
   useEffect(() => {
-    if (!playerLayout || !step) {
+    if (!step) {
       return;
     }
     const state = navigation.getState();
@@ -404,7 +396,7 @@ export default function StepDetailScreen() {
         source: previousRoute.key,
       });
     }
-  }, [playerLayout, step, navigation]);
+  }, [step, navigation]);
 
   const togglePlayback = useCallback(() => {
     if (!step) {
@@ -459,7 +451,7 @@ export default function StepDetailScreen() {
 
   const stepsLoaded = steps.length > 0;
   useEffect(() => {
-    if (playerLayout && stepsLoaded) {
+    if (stepsLoaded) {
       showCounter();
     }
     return () => {
@@ -467,7 +459,7 @@ export default function StepDetailScreen() {
         clearTimeout(counterTimerRef.current);
       }
     };
-  }, [playerLayout, stepsLoaded, showCounter]);
+  }, [stepsLoaded, showCounter]);
 
   // While an arrow-triggered scroll animates, live onScroll tracking is
   // suppressed — otherwise it would report the still-current page and flicker
@@ -614,8 +606,7 @@ export default function StepDetailScreen() {
 
   const task = taskQuery.data;
 
-  if (playerLayout) {
-    return (
+  return (
       <View style={styles.root}>
         <View style={[styles.playerHeader, { paddingTop: insets.top + spacing.sm }]}>
           <BackButton onPress={() => navigation.goBack()} variant="dark" />
@@ -771,66 +762,6 @@ export default function StepDetailScreen() {
           </View>
         </View>
       </View>
-    );
-  }
-
-  return (
-    <View style={styles.root}>
-      <ScrollView
-        contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.hero}>
-          {visualUri ? (
-            <CachedImage
-              accessibilityLabel={`${step.text} photo`}
-              uri={visualUri}
-              cacheKey={visual?.assetId ?? ''}
-              style={StyleSheet.absoluteFill}
-              contentFit="cover"
-            />
-          ) : (
-            <View style={[StyleSheet.absoluteFill, styles.heroPlaceholder]}>
-              <Ionicons name="image-outline" size={40} color={colors.disabled} />
-            </View>
-          )}
-          <View style={[styles.heroTopRow, { paddingTop: insets.top + spacing.sm }]}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="All steps"
-              onPress={() => navigation.goBack()}
-              style={({ pressed }) => [styles.backPill, pressed ? styles.pressed : null]}
-            >
-              <Ionicons name="arrow-back" size={18} color={colors.onPrimary} />
-              <Text style={styles.backPillText}>All steps</Text>
-            </Pressable>
-            <View style={styles.counterPill}>
-              <Text style={styles.counterText}>
-                {index + 1} / {steps.length}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.body}>
-          <Text style={styles.taskCaption}>{task.title.toUpperCase()}</Text>
-          <Text style={styles.stepHeading}>Step {index + 1}</Text>
-          <Text style={styles.stepText}>{step.text}</Text>
-          {step.description ? <Text style={styles.stepDescription}>{step.description}</Text> : null}
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={isPlaying ? 'Stop' : 'Listen to this step'}
-            accessibilityState={{ selected: isPlaying }}
-            onPress={togglePlayback}
-            style={({ pressed }) => [styles.listenButton, pressed ? styles.pressed : null]}
-          >
-            <Ionicons name={isPlaying ? 'stop' : 'volume-high'} size={20} color={colors.primary} />
-            <Text style={styles.listenText}>{isPlaying ? 'Stop' : 'Listen to this step'}</Text>
-          </Pressable>
-        </View>
-      </ScrollView>
-    </View>
   );
 }
 
@@ -993,23 +924,7 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     paddingHorizontal: spacing.xl,
   },
-  // ── Classic (instance runner) layout ──────────────────────────────────────
-  hero: {
-    width: '100%',
-    height: 360,
-    backgroundColor: '#000',
-  },
-  heroPlaceholder: {
-    backgroundColor: colors.surfaceWarm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.xl,
-  },
+  // Error-state "All steps" pill.
   backPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1022,56 +937,6 @@ const styles = StyleSheet.create({
   backPillText: {
     ...typography.bodyStrong,
     color: colors.onPrimary,
-  },
-  counterPill: {
-    paddingHorizontal: spacing.lg,
-    height: 44,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(27,34,48,0.55)',
-  },
-  counterText: {
-    ...typography.bodyStrong,
-    color: colors.onPrimary,
-  },
-  body: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xl,
-  },
-  taskCaption: {
-    ...typography.caption,
-    letterSpacing: 1,
-    color: colors.textMuted,
-  },
-  stepHeading: {
-    ...typography.title,
-    color: colors.text,
-    marginTop: spacing.sm,
-  },
-  stepText: {
-    ...typography.heading,
-    color: colors.text,
-    marginTop: spacing.sm,
-  },
-  stepDescription: {
-    ...typography.body,
-    color: colors.textMuted,
-    marginTop: spacing.md,
-  },
-  listenButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    minHeight: 56,
-    borderRadius: radius.lg,
-    backgroundColor: '#FDEDE8',
-    marginTop: spacing.xl,
-  },
-  listenText: {
-    ...typography.button,
-    color: colors.primary,
   },
   pressed: {
     opacity: 0.72,
