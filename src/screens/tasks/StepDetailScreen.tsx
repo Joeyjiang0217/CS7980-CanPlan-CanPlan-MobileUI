@@ -190,10 +190,11 @@ export default function StepDetailScreen() {
   // completed/skipped occurrences are read-only here, matching the step list.
   const canToggle =
     isInstance && Boolean(instanceId) && status !== 'COMPLETED' && status !== 'SKIPPED';
-  // Template mode and skipped occurrences use the swipeable "player" layout;
-  // materialized runner modes (to do / overdue / done) keep the classic layout
-  // with the completion button.
-  const playerMode = !isInstance || status === 'SKIPPED';
+  // Display-only variants use the swipeable "player" layout: template mode,
+  // skipped occurrences, and unmaterialized (not yet started) to do/overdue
+  // occurrences. Materialized runner modes (to do / overdue with check-off,
+  // and done) keep the classic layout with the completion button.
+  const playerMode = !isInstance || !instanceId || status === 'SKIPPED';
 
   // Cloud-first completion state, same as TaskViewScreen: the instance's step
   // snapshot is the source of truth, with an optimistic flip while saving.
