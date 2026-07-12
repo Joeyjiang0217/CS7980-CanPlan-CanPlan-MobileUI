@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   occurrenceKey,
+  setOccurrenceInstanceId,
   setOccurrenceStatus,
   useOccurrenceStatuses,
 } from '../../features/assignments/occurrenceCompletion';
@@ -498,6 +499,12 @@ function HoldToSkipButton({ onComplete }: { onComplete: () => void }) {
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
+/** Local (not UTC) YYYY-MM-DD, comparable with the feed's scheduledDate. */
+const localISODate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
+
 export default function TaskViewScreen() {
   const navigation = useNavigation<TaskViewNavigation>();
   const route = useRoute<TaskViewRoute>();
@@ -529,6 +536,7 @@ export default function TaskViewScreen() {
   const [activeStepId, setActiveStepId] = useState<string>();
   const [skipConfirmVisible, setSkipConfirmVisible] = useState(false);
   const [unskipConfirmVisible, setUnskipConfirmVisible] = useState(false);
+  const [startConfirmVisible, setStartConfirmVisible] = useState(false);
   // "Mark as done now or later?" prompt. Tracks what opened it so "Later" can
   // still navigate back when the prompt was triggered by the back button.
   const [allDonePrompt, setAllDonePrompt] = useState<'auto' | 'back' | null>(null);
@@ -640,6 +648,41 @@ export default function TaskViewScreen() {
   // now" button). An occurrence without an instance renders read-only here:
   // steps are visible but there is no progress bar, check-off, or skip.
   const isMaterialized = Boolean(instanceId);
+
+  // In-page start: same rule as the calendar card — today or earlier and not
+  // resolved. Gray (not-active-yet) occurrences never reach this screen; the
+  // calendar blocks them with its "Not active yet" alert.
+  const canStartOccurrence =
+    isInstance &&
+    !isMaterialized &&
+    !isCompletedOcc &&
+    !isSkippedOcc &&
+    (scheduledDate as string) <= localISODate(new Date());
+
+  const handleStartOccurrence = useCallback(async () => {
+    setStartConfirmVisible(false);
+    setFinishError(undefined);
+    try {
+      const id = await ensureInstance();
+      // Mirror into the in-memory store so the calendar reflects the start
+      // instantly (same derivation as the calendar's own start button:
+      // past-due occurrences stay OVERDUE, future-of-now becomes IN_PROGRESS).
+      if (occKey) {
+        setOccurrenceInstanceId(occKey, id);
+        const scheduledMs = scheduledFor ? new Date(scheduledFor).getTime() : NaN;
+        setOccurrenceStatus(
+          occKey,
+          Number.isFinite(scheduledMs) && Date.now() > scheduledMs
+            ? 'OVERDUE'
+            : 'IN_PROGRESS',
+        );
+      }
+    } catch (error) {
+      setFinishError(
+        error instanceof Error ? error.message : 'Could not start this task. Please try again.',
+      );
+    }
+  }, [ensureInstance, occKey, scheduledFor]);
 
   // Remind the user that time on this list isn't tracked — only opened steps
   // are. Auto-hides, and stays quiet for a while once shown.
@@ -884,6 +927,35 @@ export default function TaskViewScreen() {
   }
 
   const task = taskQuery.data;
+  const startControl = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: isFinishing }}
+      accessibilityLabel={isOverdueOcc ? `Start ${task.title} now` : `Start ${task.title}`}
+      disabled={isFinishing}
+      onPress={() => setStartConfirmVisible(true)}
+      style={({ pressed }) => [
+        styles.statusNotice,
+        styles.statusNoticeUnskip,
+        pressed ? styles.pressed : null,
+        isFinishing ? styles.statusNoticeDisabled : null,
+      ]}
+    >
+      <Ionicons
+        name="play"
+        size={20}
+        color={isFinishing ? colors.disabled : colors.onPrimary}
+      />
+      <Text
+        style={[
+          styles.statusNoticeText,
+          { color: isFinishing ? colors.disabled : colors.onPrimary },
+        ]}
+      >
+        {isFinishing ? 'Starting…' : isOverdueOcc ? 'Start now' : 'Start'}
+      </Text>
+    </Pressable>
+  );
   const unskipControl = (
     <Pressable
       accessibilityRole="button"
@@ -961,6 +1033,13 @@ export default function TaskViewScreen() {
       {/* Skipped occurrence: un-skip is the only action offered; the progress
           bar and list below are a read-only record of what was done. */}
       {isSkippedOcc ? <View style={styles.unskipBar}>{unskipControl}</View> : null}
+
+      {/* Not-yet-started occurrence: in-page start, mirroring the calendar
+          card's To Do / "Start now" button. Starting flips this same screen
+          into the live runner (progress bar + check-offs) in place. */}
+      {canStartOccurrence ? (
+        <View style={[styles.unskipBar, styles.startBar]}>{startControl}</View>
+      ) : null}
 
       {isInstance && stepCount > 0 && isMaterialized ? (
         <View style={styles.progressWrap}>
@@ -1097,11 +1176,16 @@ export default function TaskViewScreen() {
 
       </View>
 
-      {/* Floating reminder (dialog-shaped, auto-hides, doesn't block the page):
-          list browsing isn't timed, opened steps are. */}
+      {/* Timing reminder (dialog with a dimmed backdrop, still auto-hides):
+          list browsing isn't timed, opened steps are. Backdrop tap dismisses. */}
       {timingHintVisible ? (
-        <View style={styles.timingHintOverlay} pointerEvents="box-none">
-          <View style={styles.timingHintDialog}>
+        <Pressable
+          style={styles.timingHintOverlay}
+          onPress={() => setTimingHintVisible(false)}
+        >
+          {/* No-op press handler so taps on the dialog body don't fall
+              through to the dismissing backdrop (same trick as ConfirmDialog). */}
+          <Pressable style={styles.timingHintDialog} onPress={() => {}}>
             <Ionicons name="time-outline" size={28} color={colors.text} />
             <Text style={styles.timingHintTitle}>Step timing</Text>
             <Text style={styles.timingHintMessage}>
@@ -1118,10 +1202,21 @@ export default function TaskViewScreen() {
             >
               <Text style={styles.timingHintButtonText}>Got it</Text>
             </Pressable>
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       ) : null}
 
+      <ConfirmDialog
+        visible={startConfirmVisible}
+        title="Start this task?"
+        message="Once you start, this task can't be deleted anymore — it can only be skipped."
+        confirmLabel="Start"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          void handleStartOccurrence();
+        }}
+        onCancel={() => setStartConfirmVisible(false)}
+      />
       <ConfirmDialog
         visible={skipConfirmVisible}
         title="Skip this task?"
@@ -1221,13 +1316,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.sm,
   },
-  // Dialog-shaped "list time isn't tracked" reminder. Floats over the screen
-  // center like ConfirmDialog but has no backdrop and auto-hides.
+  // The start bar sits directly above the step list / overdue banner, so give
+  // it extra breathing room (the un-skip bar is followed by the progress bar,
+  // which brings its own spacing).
+  startBar: {
+    paddingBottom: spacing.lg,
+  },
+  // Dialog-shaped "list time isn't tracked" reminder. Dimmed backdrop matching
+  // ConfirmDialog's so it reads as a real prompt; still auto-hides.
   timingHintOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.xl,
+    backgroundColor: 'rgba(20, 14, 6, 0.45)',
   },
   timingHintDialog: {
     width: '100%',
