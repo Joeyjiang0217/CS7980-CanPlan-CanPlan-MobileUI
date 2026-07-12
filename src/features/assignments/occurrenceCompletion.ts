@@ -98,6 +98,11 @@ export function useOccurrenceInstanceIds(): ReadonlyMap<string, string> {
   );
 }
 
+/** Snapshot of the status overrides for non-React callers (reminder scheduler). */
+export function getOccurrenceStatusOverrides(): ReadonlyMap<string, OccurrenceStatus> {
+  return statusSnapshot;
+}
+
 /** Subscribe to the whole map of occurrence status overrides. */
 export function useOccurrenceStatuses(): ReadonlyMap<string, OccurrenceStatus> {
   return useSyncExternalStore(

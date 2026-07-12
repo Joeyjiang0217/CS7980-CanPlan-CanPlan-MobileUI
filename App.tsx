@@ -12,6 +12,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppProviders } from './src/app/AppProviders';
 import { useSession } from './src/app/SessionContext';
 import { useCurrentUser } from './src/features/auth';
+import TaskReminderManager from './src/features/notifications/TaskReminderManager';
+import { navigationRef } from './src/navigation/navigationRef';
 import { useMyProfile } from './src/features/users/hooks/useMyProfile';
 import { readSimpleMode } from './src/features/users/hooks/useSimpleMode';
 import CreateAccountScreen from './src/screens/auth/CreateAccountScreen';
@@ -146,8 +148,9 @@ export default function App() {
     <GestureHandlerRootView style={styles.gestureRoot}>
       <AppProviders>
         <SafeAreaProvider>
-          <NavigationContainer>
+          <NavigationContainer ref={navigationRef}>
             <RootStack />
+            <TaskReminderManager />
           </NavigationContainer>
           <StatusBar style="dark" />
         </SafeAreaProvider>

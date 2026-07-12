@@ -1,19 +1,35 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Fragment, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Fragment, useCallback, useEffect, useState } from 'react';
+import {
+  AppState,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import type { NotificationAlertPreference } from '../features/notifications/alertPreference';
+import {
+  setNotificationAlertPreference,
+  useNotificationAlertPreference,
+} from '../features/notifications/alertPreference';
+import {
+  ensureNotificationPermission,
+  hasNotificationPermission,
+} from '../features/notifications/permissions';
+import { requestTaskReminderResync } from '../features/notifications/taskReminders';
 import type { MainStackParamList } from '../navigation/types';
 import BackButton from '../shared/components/BackButton';
 import { colors, radius, shadow, spacing, typography } from '../shared/theme/tokens';
 
 type NotificationsNavigation = NativeStackNavigationProp<MainStackParamList, 'Notifications'>;
 
-type NotificationAlert = 'NONE' | 'FIFTEEN_MINUTES_BEFORE' | 'AT_TIME';
-
-const ALERT_OPTIONS: Array<{ value: NotificationAlert; label: string }> = [
+const ALERT_OPTIONS: Array<{ value: NotificationAlertPreference; label: string }> = [
   { value: 'NONE', label: 'None' },
   { value: 'FIFTEEN_MINUTES_BEFORE', label: '15 Minutes Before Event' },
   { value: 'AT_TIME', label: 'At Time of Event' },
@@ -23,8 +39,55 @@ export default function NotificationsSettingsScreen() {
   const navigation = useNavigation<NotificationsNavigation>();
   const insets = useSafeAreaInsets();
 
-  // UI-only for now — selection is local and not persisted yet.
-  const [selected, setSelected] = useState<NotificationAlert>('AT_TIME');
+  const selected = useNotificationAlertPreference();
+  // Shown when reminders are on (or were just requested) but the OS permission
+  // is denied — the iOS dialog only appears once, so we link to Settings.
+  const [permissionBlocked, setPermissionBlocked] = useState(false);
+
+  useEffect(() => {
+    // Granted always clears the banner (e.g. returning from system settings);
+    // a missing permission only raises it when reminders are actually on —
+    // never lowers it, so the deny flow's banner survives the revert to NONE.
+    let stale = false;
+    const check = () => {
+      void hasNotificationPermission().then((granted) => {
+        if (stale) {
+          return;
+        }
+        if (granted) {
+          setPermissionBlocked(false);
+        } else if (selected !== 'NONE') {
+          setPermissionBlocked(true);
+        }
+      });
+    };
+    check();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        check();
+      }
+    });
+    return () => {
+      stale = true;
+      subscription.remove();
+    };
+  }, [selected]);
+
+  const choose = useCallback(async (value: NotificationAlertPreference) => {
+    if (value !== 'NONE') {
+      const permission = await ensureNotificationPermission();
+      if (permission !== 'granted') {
+        // Stay on None rather than silently arming reminders that can't fire.
+        setPermissionBlocked(true);
+        await setNotificationAlertPreference('NONE');
+        requestTaskReminderResync();
+        return;
+      }
+    }
+    setPermissionBlocked(false);
+    await setNotificationAlertPreference(value);
+    requestTaskReminderResync(0);
+  }, []);
 
   return (
     <View style={styles.root}>
@@ -54,7 +117,7 @@ export default function NotificationsSettingsScreen() {
                   accessibilityRole="radio"
                   accessibilityLabel={option.label}
                   accessibilityState={{ selected: isSelected }}
-                  onPress={() => setSelected(option.value)}
+                  onPress={() => void choose(option.value)}
                   style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
                 >
                   <Text style={styles.rowLabel}>{option.label}</Text>
@@ -67,9 +130,24 @@ export default function NotificationsSettingsScreen() {
           })}
         </View>
 
-        <Text style={styles.helperText}>
-          Currently, these settings will only apply to newly created repeat instances on tasks
-        </Text>
+        {permissionBlocked ? (
+          <View style={styles.permissionBanner}>
+            <Ionicons name="notifications-off-outline" size={22} color={colors.textMuted} />
+            <View style={styles.permissionBody}>
+              <Text style={styles.permissionText}>
+                Notifications are turned off for CanPlan. Allow them in system
+                settings to get task reminders.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Open system settings"
+                onPress={() => void Linking.openSettings()}
+              >
+                <Text style={styles.permissionLink}>Open Settings</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -130,11 +208,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
     marginHorizontal: spacing.xl,
   },
-  helperText: {
+  permissionBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    backgroundColor: colors.surfaceWarm,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginTop: spacing.xl,
+  },
+  permissionBody: {
+    flex: 1,
+    gap: spacing.sm,
+  },
+  permissionText: {
     ...typography.body,
     color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: spacing.xl,
-    paddingHorizontal: spacing.lg,
+  },
+  permissionLink: {
+    ...typography.body,
+    color: colors.primary,
+    fontWeight: '600',
   },
 });

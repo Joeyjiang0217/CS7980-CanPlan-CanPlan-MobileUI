@@ -27,6 +27,7 @@
       "expo-audio",
       "expo-video",
       "expo-asset",
+      "expo-notifications",
       [
         "expo-build-properties",
         {

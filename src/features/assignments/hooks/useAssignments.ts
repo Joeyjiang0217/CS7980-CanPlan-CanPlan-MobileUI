@@ -11,6 +11,7 @@ import type {
   StartTaskInstanceStepInput,
   UpdateTaskInstanceStatusInput,
 } from '../../../shared/api/canplanTypes';
+import { requestTaskReminderResync } from '../../notifications/taskReminders';
 import { queryKeys } from '../../../shared/query/queryKeys';
 import {
   cancelTaskInstance,
@@ -109,6 +110,9 @@ function useAssignmentMutation<TInput, TResult>(
     mutationFn,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
+      // Any assignment/instance change can invalidate pending local reminders
+      // (complete/skip drops one, create/end/delete reshapes the window).
+      requestTaskReminderResync();
     },
   });
 }
