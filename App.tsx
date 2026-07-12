@@ -13,9 +13,13 @@ import { AppProviders } from './src/app/AppProviders';
 import { useSession } from './src/app/SessionContext';
 import { useCurrentUser } from './src/features/auth';
 import TaskReminderManager from './src/features/notifications/TaskReminderManager';
+import {
+  startingPageRouteName,
+  useInterfaceSettings,
+  useInterfaceSettingsHydrated,
+} from './src/features/settings/interfaceSettings';
 import { navigationRef } from './src/navigation/navigationRef';
 import { useMyProfile } from './src/features/users/hooks/useMyProfile';
-import { readSimpleMode } from './src/features/users/hooks/useSimpleMode';
 import CreateAccountScreen from './src/screens/auth/CreateAccountScreen';
 import ForgotPasswordResetScreen from './src/screens/auth/ForgotPasswordResetScreen';
 import ForgotPasswordScreen from './src/screens/auth/ForgotPasswordScreen';
@@ -68,8 +72,13 @@ function RootStack() {
   const { data: profile, isLoading: profileLoading } = useMyProfile({
     enabled: !!currentUser && !isGuest,
   });
+  // Simple Mode + starting page come from the locally persisted interface
+  // settings; wait for the AsyncStorage read (milliseconds) so a Simple Mode
+  // start page doesn't flash Home on relaunch.
+  const interfaceSettings = useInterfaceSettings();
+  const settingsHydrated = useInterfaceSettingsHydrated();
 
-  if (userLoading) {
+  if (userLoading || !settingsHydrated) {
     return <Splash />;
   }
   // Real user signed in but the profile fetch hasn't completed yet — wait
@@ -80,12 +89,15 @@ function RootStack() {
 
   const isAuthed = !!currentUser || isGuest;
   const needsOnboarding = !!currentUser && !isGuest && profile == null;
-  const simpleMode = readSimpleMode(profile?.accessibilitySettings);
 
   return (
     <Stack.Navigator
       screenOptions={{ headerShown: false }}
-      initialRouteName={simpleMode ? 'AllTasks' : 'Home'}
+      initialRouteName={
+        interfaceSettings.simpleMode
+          ? startingPageRouteName(interfaceSettings.startingPage)
+          : 'Home'
+      }
     >
       {!isAuthed ? (
         <>

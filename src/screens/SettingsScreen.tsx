@@ -5,6 +5,10 @@ import { Fragment } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  startingPageRouteName,
+  useInterfaceSettings,
+} from '../features/settings/interfaceSettings';
 import type { MainStackParamList } from '../navigation/types';
 import BackButton from '../shared/components/BackButton';
 import { colors, radius, shadow, spacing, typography } from '../shared/theme/tokens';
@@ -33,11 +37,22 @@ const ITEMS: SettingsItem[] = [
 export default function SettingsScreen() {
   const navigation = useNavigation<SettingsNavigation>();
   const insets = useSafeAreaInsets();
+  const { simpleMode, startingPage } = useInterfaceSettings();
+
+  // Leaving Settings lands on the currently effective root rather than
+  // whatever the stack held when Settings was opened — flipping Simple Mode
+  // in here must change where "back" goes (e.g. Home → simple All Tasks).
+  const handleBack = () => {
+    navigation.reset({
+      index: 0,
+      routes: [{ name: simpleMode ? startingPageRouteName(startingPage) : 'Home' }],
+    });
+  };
 
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <BackButton onPress={() => navigation.goBack()} variant="dark" />
+        <BackButton onPress={handleBack} variant="dark" />
         <Text accessibilityRole="header" style={styles.headerTitle}>
           Settings
         </Text>

@@ -1,10 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Fragment, useState } from 'react';
+import { Fragment } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import type { StartingPage } from '../features/settings/interfaceSettings';
+import {
+  updateInterfaceSettings,
+  useInterfaceSettings,
+} from '../features/settings/interfaceSettings';
 import type { MainStackParamList } from '../navigation/types';
 import BackButton from '../shared/components/BackButton';
 import PercentSlider from '../shared/components/PercentSlider';
@@ -12,15 +17,13 @@ import { colors, radius, shadow, spacing, typography } from '../shared/theme/tok
 
 type InterfaceSettingsNavigation = NativeStackNavigationProp<MainStackParamList, 'Interface'>;
 
-type StartingPage = 'CALENDAR' | 'ALL_TASKS' | 'CATEGORIES';
-
 const STARTING_PAGE_OPTIONS: Array<{ value: StartingPage; label: string }> = [
   { value: 'CALENDAR', label: 'Calendar' },
   { value: 'ALL_TASKS', label: 'All Tasks' },
   { value: 'CATEGORIES', label: 'Categories' },
 ];
 
-/** Toggle options in display order, with their initial (UI-only) default. */
+/** Toggle options in display order; values live in the persisted settings. */
 type ToggleKey =
   | 'simpleMode'
   | 'allowChangingDate'
@@ -30,33 +33,24 @@ type ToggleKey =
   | 'allowCompleteOnStart'
   | 'autoAddCompleted';
 
-const TOGGLE_OPTIONS: Array<{ key: ToggleKey; label: string; defaultOn: boolean }> = [
-  { key: 'simpleMode', label: "Enable 'Simple Mode'", defaultOn: false },
-  { key: 'allowChangingDate', label: 'Allow Changing Date in Calendar', defaultOn: true },
-  { key: 'useCategories', label: 'Use Categories to Manage Tasks', defaultOn: true },
-  { key: 'showOverdue', label: 'Show Overdue Tasks on Launch', defaultOn: false },
-  { key: 'onlyToday', label: "Only Show Today's Tasks", defaultOn: false },
-  { key: 'allowCompleteOnStart', label: 'Allow Completing Tasks on Start', defaultOn: true },
-  { key: 'autoAddCompleted', label: 'Automatically Add Completed Tasks to Calendar', defaultOn: true },
+const TOGGLE_OPTIONS: Array<{ key: ToggleKey; label: string }> = [
+  { key: 'simpleMode', label: "Enable 'Simple Mode'" },
+  { key: 'allowChangingDate', label: 'Allow Changing Date in Calendar' },
+  { key: 'useCategories', label: 'Use Categories to Manage Tasks' },
+  { key: 'showOverdue', label: 'Show Overdue Tasks on Launch' },
+  { key: 'onlyToday', label: "Only Show Today's Tasks" },
+  { key: 'allowCompleteOnStart', label: 'Allow Completing Tasks on Start' },
+  { key: 'autoAddCompleted', label: 'Automatically Add Completed Tasks to Calendar' },
 ];
-
-const initialToggleState = (): Record<ToggleKey, boolean> =>
-  TOGGLE_OPTIONS.reduce(
-    (acc, option) => ({ ...acc, [option.key]: option.defaultOn }),
-    {} as Record<ToggleKey, boolean>,
-  );
 
 export default function InterfaceSettingsScreen() {
   const navigation = useNavigation<InterfaceSettingsNavigation>();
   const insets = useSafeAreaInsets();
 
-  // UI-only for now — nothing is persisted yet.
-  const [startingPage, setStartingPage] = useState<StartingPage>('CALENDAR');
-  const [toggles, setToggles] = useState<Record<ToggleKey, boolean>>(initialToggleState);
-  const [iconSize, setIconSize] = useState(50);
-
-  const setToggle = (key: ToggleKey, next: boolean) =>
-    setToggles((current) => ({ ...current, [key]: next }));
+  // Persisted locally (AsyncStorage) — survives leaving and re-entering this
+  // screen and app restarts. Wiring these values into app behavior is the
+  // next pass.
+  const settings = useInterfaceSettings();
 
   return (
     <View style={styles.root}>
@@ -74,33 +68,43 @@ export default function InterfaceSettingsScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.sectionLabel}>STARTING PAGE</Text>
-        <Text style={styles.sectionSubtitle}>Only visible when Simple Mode is enabled</Text>
+        {settings.simpleMode ? (
+          <>
+            <Text style={styles.sectionLabel}>STARTING PAGE</Text>
+            <Text style={styles.sectionSubtitle}>
+              Only visible when Simple Mode is enabled
+            </Text>
 
-        <View style={styles.card}>
-          {STARTING_PAGE_OPTIONS.map((option, index) => {
-            const isSelected = startingPage === option.value;
-            return (
-              <Fragment key={option.value}>
-                {index > 0 ? <View style={styles.divider} /> : null}
-                <Pressable
-                  accessibilityRole="radio"
-                  accessibilityLabel={option.label}
-                  accessibilityState={{ selected: isSelected }}
-                  onPress={() => setStartingPage(option.value)}
-                  style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
-                >
-                  <Text style={styles.rowLabel}>{option.label}</Text>
-                  {isSelected ? (
-                    <Ionicons name="checkmark" size={24} color={colors.primary} />
-                  ) : null}
-                </Pressable>
-              </Fragment>
-            );
-          })}
-        </View>
+            <View style={styles.card}>
+              {STARTING_PAGE_OPTIONS.map((option, index) => {
+                const isSelected = settings.startingPage === option.value;
+                return (
+                  <Fragment key={option.value}>
+                    {index > 0 ? <View style={styles.divider} /> : null}
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityLabel={option.label}
+                      accessibilityState={{ selected: isSelected }}
+                      onPress={() => updateInterfaceSettings({ startingPage: option.value })}
+                      style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
+                    >
+                      <Text style={styles.rowLabel}>{option.label}</Text>
+                      {isSelected ? (
+                        <Ionicons name="checkmark" size={24} color={colors.primary} />
+                      ) : null}
+                    </Pressable>
+                  </Fragment>
+                );
+              })}
+            </View>
+          </>
+        ) : null}
 
-        <Text style={[styles.sectionLabel, styles.sectionSpacer]}>OPTIONS</Text>
+        <Text
+          style={[styles.sectionLabel, settings.simpleMode ? styles.sectionSpacer : null]}
+        >
+          OPTIONS
+        </Text>
 
         <View style={styles.card}>
           {TOGGLE_OPTIONS.map((option, index) => (
@@ -110,8 +114,8 @@ export default function InterfaceSettingsScreen() {
                 <Text style={styles.rowLabel}>{option.label}</Text>
                 <Switch
                   accessibilityLabel={option.label}
-                  value={toggles[option.key]}
-                  onValueChange={(next) => setToggle(option.key, next)}
+                  value={settings[option.key]}
+                  onValueChange={(next) => updateInterfaceSettings({ [option.key]: next })}
                   trackColor={{ false: colors.disabled, true: colors.primary }}
                   thumbColor={colors.onPrimary}
                   ios_backgroundColor={colors.disabled}
@@ -122,14 +126,14 @@ export default function InterfaceSettingsScreen() {
         </View>
 
         <Text style={[styles.sectionLabel, styles.sectionSpacer]}>
-          TASK ICON SIZE — {iconSize}%
+          TASK ICON SIZE — {settings.iconSizePercent}%
         </Text>
 
         <View style={styles.card}>
           <View style={styles.sliderCardContent}>
             <PercentSlider
-              value={iconSize}
-              onChange={setIconSize}
+              value={settings.iconSizePercent}
+              onChange={(next) => updateInterfaceSettings({ iconSizePercent: next })}
               accessibilityLabel="Task icon size"
             />
             <View style={styles.sliderLabels}>
