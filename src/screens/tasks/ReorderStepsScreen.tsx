@@ -2,25 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { type InfiniteData, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  type StyleProp,
-  type ViewStyle,
-} from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-  type SharedValue,
-} from 'react-native-reanimated';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import DraggableFlatList, {
+  ScaleDecorator,
+  type RenderItemParams,
+} from 'react-native-draggable-flatlist';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -36,73 +23,8 @@ import { colors, radius, shadow, spacing, typography } from '../../shared/theme/
 
 type ReorderStepsNavigation = NativeStackNavigationProp<MainStackParamList, 'ReorderSteps'>;
 type ReorderStepsRoute = RouteProp<MainStackParamList, 'ReorderSteps'>;
-type StepPositions = Record<string, number>;
 
-const REORDER_STEP_ROW_SLOT_HEIGHT = 64;
-const REORDER_ANIMATION_DURATION_MS = 260;
 const TASK_STEPS_QUERY_LIMIT = 50;
-
-function orderStepsByIds(steps: TaskStep[], orderedIds: string[]) {
-  if (orderedIds.length === 0) return steps;
-
-  const byId = new Map(steps.map((step) => [step.stepId, step]));
-  const used = new Set<string>();
-  const ordered: TaskStep[] = [];
-
-  for (const id of orderedIds) {
-    const step = byId.get(id);
-    if (step) {
-      ordered.push(step);
-      used.add(id);
-    }
-  }
-
-  for (const step of steps) {
-    if (!used.has(step.stepId)) ordered.push(step);
-  }
-
-  return ordered;
-}
-
-function makeStepPositions(steps: TaskStep[]) {
-  return steps.reduce<StepPositions>((positions, step, index) => {
-    positions[step.stepId] = index;
-    return positions;
-  }, {});
-}
-
-function orderedIdsFromPositions(positions: StepPositions) {
-  return Object.entries(positions)
-    .sort(([, a], [, b]) => a - b)
-    .map(([stepId]) => stepId);
-}
-
-function clampIndex(value: number, max: number) {
-  'worklet';
-  return Math.min(Math.max(value, 0), max);
-}
-
-function movePosition(positions: StepPositions, from: number, to: number) {
-  'worklet';
-
-  if (from === to) return positions;
-
-  const next = { ...positions };
-  const movingDown = to > from;
-
-  for (const stepId in positions) {
-    const position = positions[stepId];
-    if (position === from) {
-      next[stepId] = to;
-    } else if (movingDown && position > from && position <= to) {
-      next[stepId] = position - 1;
-    } else if (!movingDown && position >= to && position < from) {
-      next[stepId] = position + 1;
-    }
-  }
-
-  return next;
-}
 
 function reorderCachedStepPages(
   cached: InfiniteData<Connection<TaskStep>> | undefined,
@@ -147,7 +69,6 @@ export default function ReorderStepsScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>();
-  const latestStepOrderRef = useRef<string[]>([]);
 
   const remoteSteps = useMemo(
     () =>
@@ -157,34 +78,21 @@ export default function ReorderStepsScreen() {
     [stepsQuery.data],
   );
 
-  // Seed local order once the remote payload arrives, and again if the remote
-  // list size changes (e.g. after a deletion).
+  // Seed local order once the remote payload arrives, preserving any local
+  // reordering for ids that still exist (e.g. after a background refetch).
   useEffect(() => {
     setOrderedSteps((prev) => {
       if (remoteSteps.length === 0) {
-        latestStepOrderRef.current = [];
         return prev.length === 0 ? prev : [];
       }
-
-      const preferredOrder =
-        latestStepOrderRef.current.length > 0
-          ? latestStepOrderRef.current
-          : prev.map((step) => step.stepId);
       const remoteById = new Map(remoteSteps.map((step) => [step.stepId, step]));
-      const kept = preferredOrder
-        .map((stepId) => remoteById.get(stepId))
+      const kept = prev
+        .map((step) => remoteById.get(step.stepId))
         .filter((step): step is TaskStep => Boolean(step));
       const seen = new Set(kept.map((s) => s.stepId));
       const additions = remoteSteps.filter((s) => !seen.has(s.stepId));
       const next = [...kept, ...additions];
-      latestStepOrderRef.current = next.map((step) => step.stepId);
-      // Preserve `prev` reference when the content is unchanged so unrelated
-      // re-renders of stepsQuery (e.g. background refetch returning the same
-      // ids in the same order) can't kick the list back via this setState.
-      if (
-        next.length === prev.length &&
-        next.every((s, i) => s.stepId === prev[i].stepId)
-      ) {
+      if (next.length === prev.length && next.every((s, i) => s.stepId === prev[i].stepId)) {
         return prev;
       }
       return next;
@@ -204,10 +112,9 @@ export default function ReorderStepsScreen() {
   const deleteDisabled = selectedCount === 0 || deleteStepMutation.isPending;
 
   const handleDone = async () => {
-    const stepsForSave = orderStepsByIds(orderedSteps, latestStepOrderRef.current);
     const hasOrderChanged =
-      stepsForSave.length === remoteSteps.length &&
-      stepsForSave.some((step, idx) => step.stepId !== remoteSteps[idx]?.stepId);
+      orderedSteps.length === remoteSteps.length &&
+      orderedSteps.some((step, idx) => step.stepId !== remoteSteps[idx]?.stepId);
 
     if (!hasOrderChanged || reorderStepsMutation.isPending) {
       navigation.goBack();
@@ -216,23 +123,18 @@ export default function ReorderStepsScreen() {
     try {
       await reorderStepsMutation.mutateAsync({
         taskId,
-        steps: stepsForSave.map((step, idx) => ({
-          stepId: step.stepId,
-          order: idx + 1,
-        })),
+        steps: orderedSteps.map((step, idx) => ({ stepId: step.stepId, order: idx + 1 })),
       });
       await queryClient.cancelQueries({
         queryKey: queryKeys.tasks.steps(taskId, TASK_STEPS_QUERY_LIMIT),
       });
       queryClient.setQueryData<InfiniteData<Connection<TaskStep>>>(
         queryKeys.tasks.steps(taskId, TASK_STEPS_QUERY_LIMIT),
-        (cached) => reorderCachedStepPages(cached, stepsForSave),
+        (cached) => reorderCachedStepPages(cached, orderedSteps),
       );
       navigation.goBack();
     } catch (err) {
-      setErrorMessage(
-        err instanceof Error ? err.message : 'Could not save the new order.',
-      );
+      setErrorMessage(err instanceof Error ? err.message : 'Could not save the new order.');
     }
   };
 
@@ -242,13 +144,7 @@ export default function ReorderStepsScreen() {
       for (const stepId of selectedIds) {
         await deleteStepMutation.mutateAsync({ taskId, stepId });
       }
-      setOrderedSteps((prev) => {
-        const next = orderStepsByIds(prev, latestStepOrderRef.current).filter(
-          (s) => !selectedIds.has(s.stepId),
-        );
-        latestStepOrderRef.current = next.map((step) => step.stepId);
-        return next;
-      });
+      setOrderedSteps((prev) => prev.filter((s) => !selectedIds.has(s.stepId)));
       setSelectedIds(new Set());
       setConfirmDelete(false);
     } catch (err) {
@@ -259,9 +155,41 @@ export default function ReorderStepsScreen() {
     }
   };
 
-  const handleOrderChange = useCallback((positions: StepPositions) => {
-    latestStepOrderRef.current = orderedIdsFromPositions(positions);
-  }, []);
+  const renderItem = useCallback(
+    ({ item, drag, isActive, getIndex }: RenderItemParams<TaskStep>) => {
+      const index = getIndex() ?? 0;
+      const selected = selectedIds.has(item.stepId);
+      return (
+        <ScaleDecorator>
+          <View style={[styles.row, isActive ? styles.rowActive : null]}>
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: selected }}
+              accessibilityLabel={`Select step ${index + 1}`}
+              onPress={() => toggleSelected(item.stepId)}
+              hitSlop={8}
+              style={[styles.checkbox, selected ? styles.checkboxChecked : null]}
+            >
+              {selected ? <Ionicons name="checkmark" size={18} color={colors.onPrimary} /> : null}
+            </Pressable>
+            <Text numberOfLines={1} style={styles.rowTitle}>
+              {item.text || `Step ${index + 1}`}
+            </Text>
+            <Pressable
+              accessibilityLabel={`Drag step ${index + 1} to reorder`}
+              onPressIn={drag}
+              disabled={isActive}
+              hitSlop={8}
+              style={styles.dragHandle}
+            >
+              <Ionicons name="reorder-three" size={28} color={colors.textMuted} />
+            </Pressable>
+          </View>
+        </ScaleDecorator>
+      );
+    },
+    [selectedIds, toggleSelected],
+  );
 
   return (
     <View style={styles.root}>
@@ -308,15 +236,19 @@ export default function ReorderStepsScreen() {
           <Text style={styles.loadingText}>Loading steps…</Text>
         </View>
       ) : (
-        <SortableStepList
-          steps={orderedSteps}
-          selectedIds={selectedIds}
-          onToggle={toggleSelected}
-          onOrderChange={handleOrderChange}
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingBottom: insets.bottom + 96 + spacing.xl },
-          ]}
+        <DraggableFlatList
+          data={orderedSteps}
+          keyExtractor={(step) => step.stepId}
+          renderItem={renderItem}
+          onDragEnd={({ data }) => setOrderedSteps(data)}
+          activationDistance={12}
+          autoscrollThreshold={90}
+          autoscrollSpeed={180}
+          showsVerticalScrollIndicator={false}
+          containerStyle={styles.list}
+          contentContainerStyle={
+            [styles.listContent, { paddingBottom: spacing.xl }] as StyleProp<ViewStyle>
+          }
         />
       )}
 
@@ -365,153 +297,6 @@ export default function ReorderStepsScreen() {
         />
       ) : null}
     </View>
-  );
-}
-
-interface SortableStepListProps {
-  steps: TaskStep[];
-  selectedIds: Set<string>;
-  onToggle: (stepId: string) => void;
-  onOrderChange: (positions: StepPositions) => void;
-  contentContainerStyle: StyleProp<ViewStyle>;
-}
-
-function SortableStepList({
-  steps,
-  selectedIds,
-  onToggle,
-  onOrderChange,
-  contentContainerStyle,
-}: SortableStepListProps) {
-  const [scrollEnabled, setScrollEnabled] = useState(true);
-  const positions = useSharedValue<StepPositions>(makeStepPositions(steps));
-  const stepIdsKey = useMemo(() => steps.map((step) => step.stepId).join('|'), [steps]);
-
-  useEffect(() => {
-    const nextPositions = makeStepPositions(steps);
-    positions.value = nextPositions;
-    onOrderChange(nextPositions);
-  }, [onOrderChange, positions, stepIdsKey, steps]);
-
-  return (
-    <ScrollView
-      style={styles.list}
-      contentContainerStyle={contentContainerStyle}
-      scrollEnabled={scrollEnabled}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={[styles.listItemsStack, { height: steps.length * REORDER_STEP_ROW_SLOT_HEIGHT }]}>
-        {steps.map((step, index) => (
-          <SortableStepRow
-            key={step.stepId}
-            item={step}
-            fallbackIndex={index}
-            positions={positions}
-            itemCount={steps.length}
-            selected={selectedIds.has(step.stepId)}
-            onToggle={onToggle}
-            onOrderChange={onOrderChange}
-            setScrollEnabled={setScrollEnabled}
-          />
-        ))}
-      </View>
-    </ScrollView>
-  );
-}
-
-interface SortableStepRowProps {
-  item: TaskStep;
-  fallbackIndex: number;
-  positions: SharedValue<StepPositions>;
-  itemCount: number;
-  selected: boolean;
-  onToggle: (stepId: string) => void;
-  onOrderChange: (positions: StepPositions) => void;
-  setScrollEnabled: (enabled: boolean) => void;
-}
-
-function SortableStepRow({
-  item,
-  fallbackIndex,
-  positions,
-  itemCount,
-  selected,
-  onToggle,
-  onOrderChange,
-  setScrollEnabled,
-}: SortableStepRowProps) {
-  const isDragging = useSharedValue(false);
-  const dragTop = useSharedValue(0);
-  const startTop = useSharedValue(0);
-
-  const gesture = Gesture.Pan()
-    .activateAfterLongPress(120)
-    .shouldCancelWhenOutside(false)
-    .onStart(() => {
-      const currentPosition = positions.value[item.stepId] ?? 0;
-      startTop.value = currentPosition * REORDER_STEP_ROW_SLOT_HEIGHT;
-      dragTop.value = startTop.value;
-      isDragging.value = true;
-      runOnJS(setScrollEnabled)(false);
-    })
-    .onUpdate((event) => {
-      const nextTop = startTop.value + event.translationY;
-      const nextPosition = clampIndex(
-        Math.round(nextTop / REORDER_STEP_ROW_SLOT_HEIGHT),
-        itemCount - 1,
-      );
-      const currentPosition = positions.value[item.stepId] ?? 0;
-
-      dragTop.value = nextTop;
-      if (nextPosition !== currentPosition) {
-        positions.value = movePosition(positions.value, currentPosition, nextPosition);
-      }
-    })
-    .onFinalize(() => {
-      const finalTop = (positions.value[item.stepId] ?? 0) * REORDER_STEP_ROW_SLOT_HEIGHT;
-      dragTop.value = withTiming(finalTop, { duration: REORDER_ANIMATION_DURATION_MS }, () => {
-        isDragging.value = false;
-        runOnJS(setScrollEnabled)(true);
-        runOnJS(onOrderChange)({ ...positions.value });
-      });
-    });
-
-  const animatedStyle = useAnimatedStyle(() => {
-    const restingTop = (positions.value[item.stepId] ?? 0) * REORDER_STEP_ROW_SLOT_HEIGHT;
-
-    return {
-      top: isDragging.value
-        ? dragTop.value
-        : withTiming(restingTop, { duration: REORDER_ANIMATION_DURATION_MS }),
-      zIndex: isDragging.value ? 10 : 0,
-    };
-  });
-
-  return (
-    <Animated.View style={[styles.row, animatedStyle]}>
-      <Pressable
-        accessibilityRole="checkbox"
-        accessibilityState={{ checked: selected }}
-        accessibilityLabel={`Select step ${fallbackIndex + 1}`}
-        onPress={() => onToggle(item.stepId)}
-        hitSlop={8}
-        style={[styles.checkbox, selected ? styles.checkboxChecked : null]}
-      >
-        {selected ? <Ionicons name="checkmark" size={18} color={colors.onPrimary} /> : null}
-      </Pressable>
-      <Text numberOfLines={1} style={styles.rowTitle}>
-        {item.text || `Step ${fallbackIndex + 1}`}
-      </Text>
-      <GestureDetector gesture={gesture}>
-        <Pressable
-          accessibilityLabel={`Drag step ${fallbackIndex + 1} to reorder`}
-          hitSlop={8}
-          style={styles.dragHandle}
-        >
-          <Ionicons name="reorder-three" size={28} color={colors.textMuted} />
-        </Pressable>
-      </GestureDetector>
-    </Animated.View>
   );
 }
 
@@ -569,32 +354,30 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textMuted,
   },
+  list: {
+    flex: 1,
+  },
   listContent: {
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.sm,
   },
-  list: {
-    backgroundColor: colors.bg,
-  },
-  listItemsStack: {
-    position: 'relative',
-  },
   row: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.lg,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.md,
-    minHeight: REORDER_STEP_ROW_SLOT_HEIGHT - spacing.md,
+    minHeight: 52,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     ...shadow.card,
+  },
+  rowActive: {
+    borderColor: colors.primary,
+    ...shadow.cardStrong,
   },
   checkbox: {
     width: 26,
@@ -619,10 +402,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xs,
   },
   bottomBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     flexDirection: 'row',
     paddingTop: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,

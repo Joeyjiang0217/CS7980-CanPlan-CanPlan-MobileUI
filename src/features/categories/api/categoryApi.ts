@@ -10,8 +10,8 @@ import type {
 
 export { canPlanApi as categoriesApi };
 
-export function listMyCategories(page?: PageInput) {
-  return canPlanApi.listMyCategories(page);
+export function listMyCategories(page?: PageInput, userId?: string | null) {
+  return canPlanApi.listMyCategories(page, userId);
 }
 
 export function createCategory(input: CreateCategoryInput) {

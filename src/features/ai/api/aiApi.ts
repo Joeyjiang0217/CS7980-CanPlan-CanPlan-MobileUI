@@ -1,7 +1,10 @@
 /** AI task-step generation API facade. */
 
 import { canPlanApi } from '../../../shared/api/canplanApi';
-import type { CreateAiTaskInput, GenerateTaskStepsInput } from '../../../shared/api/canplanTypes';
+import type {
+  CreateAiTaskInput,
+  GenerateTaskStepsInput,
+} from '../../../shared/api/canplanTypes';
 
 export { canPlanApi as aiApi };
 

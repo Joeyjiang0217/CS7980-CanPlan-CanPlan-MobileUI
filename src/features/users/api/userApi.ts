@@ -10,8 +10,9 @@ import { getCurrentUserId } from '../../../shared/api/authTokenProvider';
 import { canPlanApi } from '../../../shared/api/canplanApi';
 import type {
   CreateMyUserProfileInput,
-  CreateSupportLinkInput,
   PageInput,
+  SelectPrimaryUserInput,
+  UnselectPrimaryUserInput,
   UpdateMyUserProfileInput,
   UserProfile,
 } from '../../../shared/api/canplanTypes';
@@ -58,16 +59,20 @@ export function getUserProfile(userId: string) {
   return canPlanApi.getUserProfile(userId);
 }
 
-export function listUsersByOrganization(organizationId: string, page?: PageInput) {
-  return canPlanApi.listUsersByOrganization(organizationId, page);
+export function listMyOrganizationUsers(page?: PageInput) {
+  return canPlanApi.listMyOrganizationUsers(page);
 }
 
-export function listPrimaryUsersBySupporter(supporterId: string, page?: PageInput) {
-  return canPlanApi.listPrimaryUsersBySupporter(supporterId, page);
+export function listMySupportList(page?: PageInput) {
+  return canPlanApi.listMySupportList(page);
 }
 
-export function createSupportLink(input: CreateSupportLinkInput) {
-  return canPlanApi.createSupportLink(input);
+export function selectPrimaryUser(input: SelectPrimaryUserInput) {
+  return canPlanApi.selectPrimaryUser(input);
+}
+
+export function unselectPrimaryUser(input: UnselectPrimaryUserInput) {
+  return canPlanApi.unselectPrimaryUser(input);
 }
 
 export function listAllUsers(page?: PageInput) {

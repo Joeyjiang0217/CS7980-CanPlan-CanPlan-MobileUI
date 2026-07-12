@@ -1,4 +1,10 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 
 import type {
   CreateMediaAssetInput,
@@ -27,13 +33,52 @@ export function useMediaForTask(taskId: string, limit = 50) {
   });
 }
 
+/**
+ * How long a fetched download URL is treated as fresh. Presigned URLs stay valid
+ * for a while (see MediaDownloadTarget.expiresIn, typically ~1h); keeping the URL
+ * fresh for 50 min lets re-mounts (re-opening the calendar, month grid, etc.)
+ * reuse the cached URL and hit the on-disk image bytes immediately, instead of
+ * re-requesting getMediaDownloadUrl on every screen open. Stays safely under the
+ * URL's own TTL so we never hand out an expired URL for a not-yet-cached image.
+ */
+export const MEDIA_URL_STALE_TIME = 1000 * 60 * 50;
+
 /** Fetches a short-lived private-S3 download URL for an existing media asset. */
 export function useMediaDownloadUrl(taskId: string, assetId: string) {
   return useQuery({
     queryKey: queryKeys.media.download(taskId, assetId),
     queryFn: () => getMediaDownloadUrl(taskId, assetId),
     enabled: Boolean(taskId) && Boolean(assetId),
-    staleTime: 0,
+    staleTime: MEDIA_URL_STALE_TIME,
+  });
+}
+
+/**
+ * Resolves download URLs for a set of covers in ONE hook and returns
+ * taskId → url. Screens that repeat the same covers across many cells (the
+ * month grid renders up to 9 covers × ~30 days) should resolve here once at the
+ * top and pass plain strings down, instead of mounting a useMediaDownloadUrl
+ * hook per cell — hundreds of query subscribers per page is what made the month
+ * pager janky. Shares the same query keys/staleTime as useMediaDownloadUrl, so
+ * both read the same cache entries.
+ */
+export function useMediaDownloadUrlMap(
+  refs: ReadonlyArray<{ taskId: string; assetId: string }>,
+): ReadonlyMap<string, string | null> {
+  return useQueries({
+    queries: refs.map(({ taskId, assetId }) => ({
+      queryKey: queryKeys.media.download(taskId, assetId),
+      queryFn: () => getMediaDownloadUrl(taskId, assetId),
+      enabled: Boolean(taskId) && Boolean(assetId),
+      staleTime: MEDIA_URL_STALE_TIME,
+    })),
+    combine: (results) => {
+      const map = new Map<string, string | null>();
+      refs.forEach((ref, index) => {
+        map.set(ref.taskId, results[index]?.data?.downloadUrl ?? null);
+      });
+      return map;
+    },
   });
 }
 

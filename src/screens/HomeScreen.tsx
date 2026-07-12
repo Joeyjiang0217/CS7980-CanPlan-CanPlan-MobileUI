@@ -130,7 +130,7 @@ export default function HomeScreen() {
           <DestinationCard
             title="Calendar"
             subtitle="See your scheduled tasks"
-            onPress={() => console.log('TODO: Calendar screen')}
+            onPress={() => navigation.navigate('Calendar')}
           />
           {profile?.role === 'SUPPORT_PERSON' ? (
             <DestinationCard

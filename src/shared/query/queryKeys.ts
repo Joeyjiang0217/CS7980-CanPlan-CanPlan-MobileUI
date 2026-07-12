@@ -12,15 +12,17 @@ export const queryKeys = {
   users: {
     myProfile: ['users', 'myProfile'] as const,
     profile: (userId: string) => ['users', 'profile', userId] as const,
-    organization: (organizationId: string, limit?: number) =>
-      ['users', 'organization', organizationId, limit] as const,
-    primaryBySupporter: (supporterId: string, limit?: number) =>
-      ['users', 'primaryBySupporter', supporterId, limit] as const,
+    myOrganization: (limit?: number) =>
+      ['users', 'myOrganization', limit] as const,
+    mySupportList: (limit?: number) =>
+      ['users', 'mySupportList', limit] as const,
     all: (limit?: number) => ['users', 'all', limit] as const,
   },
   categories: {
     all: ['categories'] as const,
     mine: (limit?: number) => ['categories', 'mine', limit] as const,
+    user: (userId: string | null | undefined, limit?: number) =>
+      ['categories', 'user', userId ?? 'self', limit] as const,
   },
   tasks: {
     all: ['tasks'] as const,
@@ -38,8 +40,14 @@ export const queryKeys = {
     mine: (limit?: number) => ['assignments', 'mine', limit] as const,
     user: (userId: string, limit?: number) =>
       ['assignments', 'user', userId, limit] as const,
-    steps: (userId: string, assignmentId: string, limit?: number) =>
-      ['assignments', 'steps', userId, assignmentId, limit] as const,
+    instanceViews: (userId: string, startDate: string, endDate: string) =>
+      ['assignments', 'instanceViews', userId, startDate, endDate] as const,
+    instanceSteps: (userId: string, instanceId: string, limit?: number) =>
+      ['assignments', 'instanceSteps', userId, instanceId, limit] as const,
+    instance: (instanceId: string) =>
+      ['assignments', 'instance', instanceId] as const,
+    instances: (startDate: string, endDate: string, limit?: number) =>
+      ['assignments', 'instances', startDate, endDate, limit] as const,
   },
   media: {
     all: ['media'] as const,

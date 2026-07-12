@@ -2,13 +2,17 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 
 import { queryKeys } from '../../../shared/query/queryKeys';
 import {
-  createSupportLink,
   getUserProfile,
   listAllUsers,
-  listPrimaryUsersBySupporter,
-  listUsersByOrganization,
+  listMyOrganizationUsers,
+  listMySupportList,
+  selectPrimaryUser,
+  unselectPrimaryUser,
 } from '../api/userApi';
-import type { CreateSupportLinkInput } from '../../../shared/api/canplanTypes';
+import type {
+  SelectPrimaryUserInput,
+  UnselectPrimaryUserInput,
+} from '../../../shared/api/canplanTypes';
 
 /** Fetches any profile by id. Use `useMyProfile` for the signed-in caller. */
 export function useUserProfile(userId: string, enabled = true) {
@@ -20,35 +24,45 @@ export function useUserProfile(userId: string, enabled = true) {
 }
 
 /** Paginated organization roster. Roster projections can have nullable fields. */
-export function useUsersByOrganization(organizationId: string, limit = 50) {
+export function useMyOrganizationUsers(limit = 50, enabled = true) {
   return useInfiniteQuery({
-    queryKey: queryKeys.users.organization(organizationId, limit),
+    queryKey: queryKeys.users.myOrganization(limit),
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) =>
-      listUsersByOrganization(organizationId, { limit, nextToken: pageParam }),
+    queryFn: ({ pageParam }) => listMyOrganizationUsers({ limit, nextToken: pageParam }),
     getNextPageParam: (lastPage) => lastPage.nextToken ?? undefined,
-    enabled: Boolean(organizationId),
+    enabled,
   });
 }
 
-/** Paginated list of primary-user links managed by a supporter. */
-export function usePrimaryUsersBySupporter(supporterId: string, limit = 50) {
+/** Paginated support list for the signed-in supporter. */
+export function useMySupportList(limit = 50, enabled = true) {
   return useInfiniteQuery({
-    queryKey: queryKeys.users.primaryBySupporter(supporterId, limit),
+    queryKey: queryKeys.users.mySupportList(limit),
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) =>
-      listPrimaryUsersBySupporter(supporterId, { limit, nextToken: pageParam }),
+    queryFn: ({ pageParam }) => listMySupportList({ limit, nextToken: pageParam }),
     getNextPageParam: (lastPage) => lastPage.nextToken ?? undefined,
-    enabled: Boolean(supporterId),
+    enabled,
   });
 }
 
-/** Creates or replaces a supporter → primary-user link. */
-export function useCreateSupportLink() {
+/** Selects a primary user for the signed-in support person. */
+export function useSelectPrimaryUser() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: CreateSupportLinkInput) => createSupportLink(input),
+    mutationFn: (input: SelectPrimaryUserInput) => selectPrimaryUser(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
+}
+
+/** Revokes a selected primary user for the signed-in support person. */
+export function useUnselectPrimaryUser() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: UnselectPrimaryUserInput) => unselectPrimaryUser(input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['users'] });
     },
