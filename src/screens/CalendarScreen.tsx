@@ -109,6 +109,25 @@ function bucketOf(status: TaskInstanceStatus): StatusKey | null {
   }
 }
 
+/**
+ * Live display status. The server derives OVERDUE only at fetch time, and the
+ * feed then sits in a 5-minute react-query cache — so an occurrence whose
+ * scheduled moment passes while on screen would stay in To Do until the next
+ * refetch. Re-derive against the wall clock with the same rule the server
+ * (and the start-mirror below) applies: past scheduledFor and unresolved →
+ * OVERDUE. Callers re-run off useMinuteTick so the flip happens live.
+ */
+function liveStatus(
+  view: Pick<TaskInstanceView, 'scheduledFor'>,
+  status: TaskInstanceStatus,
+): TaskInstanceStatus {
+  if (status !== 'TO_DO' && status !== 'IN_PROGRESS') {
+    return status;
+  }
+  const scheduledMs = new Date(view.scheduledFor).getTime();
+  return Number.isFinite(scheduledMs) && Date.now() > scheduledMs ? 'OVERDUE' : status;
+}
+
 function isResolvedAfterScheduled(view: TaskInstanceView, resolvedAt?: string | null) {
   if (!resolvedAt) {
     return false;
@@ -204,6 +223,26 @@ function useToday(): Date {
   });
 
   return today;
+}
+
+/**
+ * Epoch minute, ticking while mounted — drives the live to do → overdue flip.
+ * Same frame-callback pattern as useToday (see its doc comment for why JS
+ * timers are avoided): the UI thread compares the minute key per frame and
+ * only wakes the JS thread when the minute actually changes.
+ */
+function useMinuteTick(): number {
+  const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60_000));
+  const watchedMinute = useSharedValue(Math.floor(Date.now() / 60_000));
+  useFrameCallback(() => {
+    'worklet';
+    const next = Math.floor(Date.now() / 60_000);
+    if (watchedMinute.value !== next) {
+      watchedMinute.value = next;
+      runOnJS(setMinute)(next);
+    }
+  });
+  return minute;
 }
 
 const calendarMountedDays = new Map<string, ReadonlySet<string>>();
@@ -1337,18 +1376,21 @@ function DayAssignmentsPage({
     return map;
   }, [instancesQuery.data]);
 
+  // minuteTick re-runs the memos below so liveStatus's wall-clock comparison
+  // stays current (the to do → overdue flip at the scheduled moment).
+  const minuteTick = useMinuteTick();
   const views = useMemo(() => {
     const result: TaskInstanceView[] = [];
     for (const view of viewsQuery.data?.items ?? []) {
       const override = statusOverrides.get(
         occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
       );
-      if (bucketOf(override ?? view.status) === activeStatus) {
+      if (bucketOf(liveStatus(view, override ?? view.status)) === activeStatus) {
         result.push(view);
       }
     }
     return result;
-  }, [viewsQuery.data, statusOverrides, activeStatus]);
+  }, [viewsQuery.data, statusOverrides, activeStatus, minuteTick]);
 
   // Group the day's occurrences into hour slots (20:00 → "20:00 - 21:00") so
   // times read as ranges under prominent slot headers.
@@ -1422,7 +1464,7 @@ function DayAssignmentsPage({
       const activeDate = activeDates.get(view.assignmentId);
       const state = occurrenceState({
         scheduledDate: view.scheduledDate,
-        status: override ?? view.status,
+        status: liveStatus(view, override ?? view.status),
         activeDate,
         todayISO,
       });
@@ -1476,6 +1518,7 @@ function DayAssignmentsPage({
       startingKeys,
       statusOverrides,
       todayISO,
+      minuteTick,
     ],
   );
 
@@ -1599,6 +1642,9 @@ export default function CalendarScreen() {
   // server status so the occurrence moves buckets within the session.
   const statusOverrides = useOccurrenceStatuses();
   const instanceIdOverrides = useOccurrenceInstanceIds();
+  // minuteTick keeps the bucket split (and the footer counts) flipping to do →
+  // overdue live as scheduled moments pass.
+  const minuteTick = useMinuteTick();
   const buckets = useMemo(() => {
     const result: Record<StatusKey, TaskInstanceView[]> = {
       overdue: [],
@@ -1610,13 +1656,13 @@ export default function CalendarScreen() {
       const override = statusOverrides.get(
         occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
       );
-      const key = bucketOf(override ?? view.status);
+      const key = bucketOf(liveStatus(view, override ?? view.status));
       if (key) {
         result[key].push(view);
       }
     }
     return result;
-  }, [dayViewsQuery.data, statusOverrides]);
+  }, [dayViewsQuery.data, statusOverrides, minuteTick]);
 
   // Horizontal pager: keep three weeks of lightweight positions, but render
   // real task pages only for dates the user has actually opened.
@@ -1761,7 +1807,7 @@ export default function CalendarScreen() {
       // window opens the materialized state, not the stale one.
       const key = occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime);
       const instanceId = view.instanceId ?? instanceIdOverrides.get(key);
-      const status = statusOverrides.get(key) ?? view.status;
+      const status = liveStatus(view, statusOverrides.get(key) ?? view.status);
       // Future occurrences are preview-only → occurrence detail. Today/past open
       // the step "runner" (TaskView in instance mode).
       if (view.scheduledDate > toISODate(today)) {
