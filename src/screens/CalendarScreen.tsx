@@ -1573,11 +1573,12 @@ function DayAssignmentsPage({
     instanceIdOverrides,
   ]);
 
-  // Pin the day-group headers while their group scrolls (QQ-roster style).
+  // Pin hour-slot and day-group headers while their section scrolls
+  // (QQ-roster style; an incoming header pushes the stuck one out).
   const stickyHeaderIndices = useMemo(() => {
     const indices: number[] = [];
     rows.forEach((row, index) => {
-      if (row.kind === 'dayheader') {
+      if (row.kind === 'header' || row.kind === 'dayheader') {
         indices.push(index);
       }
     });
@@ -1593,7 +1594,12 @@ function DayAssignmentsPage({
         return <Text style={styles.stateText}>{item.message}</Text>;
       }
       if (item.kind === 'header') {
-        return <Text style={styles.slotHeader}>{slotLabel(item.hour)}</Text>;
+        // Opaque wrapper so cards scroll cleanly underneath while stuck.
+        return (
+          <View style={styles.slotHeaderRow}>
+            <Text style={styles.slotHeader}>{slotLabel(item.hour)}</Text>
+          </View>
+        );
       }
       if (item.kind === 'dayheader') {
         return (
@@ -2502,6 +2508,10 @@ const styles = StyleSheet.create({
   slotHeader: {
     ...typography.heading,
     color: colors.text,
+  },
+  slotHeaderRow: {
+    backgroundColor: colors.bg,
+    paddingVertical: spacing.xs,
   },
   // Collapsible past-day group header. Opaque background so cards scroll
   // cleanly underneath while it's stuck to the top.
