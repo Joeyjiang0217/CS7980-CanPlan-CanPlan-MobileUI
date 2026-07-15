@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useSession } from '../app/SessionContext';
 import { useCurrentUser, useSignOut } from '../features/auth';
+import { useInterfaceSettings } from '../features/settings/interfaceSettings';
 import { useMyProfile } from '../features/users/hooks/useMyProfile';
 import type { MainStackParamList } from '../navigation/types';
 import ConfirmDialog from '../shared/components/ConfirmDialog';
@@ -43,6 +44,9 @@ export default function HomeScreen() {
   const { data: currentUser } = useCurrentUser();
   // In guest mode there is no profile to fetch — skip the query.
   const { data: profile } = useMyProfile({ enabled: !!currentUser && !isGuest });
+  // Interface setting: hide the Categories entry point when categories aren't
+  // used to manage tasks.
+  const { useCategories } = useInterfaceSettings();
   const signOutMutation = useSignOut();
   const [confirmVisible, setConfirmVisible] = useState(false);
 
@@ -122,11 +126,13 @@ export default function HomeScreen() {
             subtitle="View and manage all your tasks"
             onPress={() => navigation.navigate('AllTasks')}
           />
-          <DestinationCard
-            title="Categories"
-            subtitle="Browse tasks by category"
-            onPress={() => navigation.navigate('Categories')}
-          />
+          {useCategories ? (
+            <DestinationCard
+              title="Categories"
+              subtitle="Browse tasks by category"
+              onPress={() => navigation.navigate('Categories')}
+            />
+          ) : null}
           <DestinationCard
             title="Calendar"
             subtitle="See your scheduled tasks"

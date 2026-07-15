@@ -89,6 +89,11 @@ function sanitize(stored: unknown): InterfaceSettings {
   ) {
     result.iconSizePercent = Math.min(100, Math.max(0, raw.iconSizePercent));
   }
+  // Coherence: Categories can't be the starting page while categories are
+  // disabled (the settings screen enforces this too; this guards old blobs).
+  if (!result.useCategories && result.startingPage === 'CATEGORIES') {
+    result.startingPage = INTERFACE_SETTINGS_DEFAULTS.startingPage;
+  }
   return result;
 }
 

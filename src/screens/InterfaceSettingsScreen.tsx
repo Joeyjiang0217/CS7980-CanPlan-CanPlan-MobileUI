@@ -52,6 +52,21 @@ export default function InterfaceSettingsScreen() {
   // next pass.
   const settings = useInterfaceSettings();
 
+  // Categories can't be a starting page while categories are disabled.
+  const startingPageOptions = settings.useCategories
+    ? STARTING_PAGE_OPTIONS
+    : STARTING_PAGE_OPTIONS.filter((option) => option.value !== 'CATEGORIES');
+
+  const setToggleValue = (key: ToggleKey, next: boolean) => {
+    // Turning categories off while Categories is the chosen starting page
+    // would leave a hidden ("ghost") selection — fall back to the default.
+    if (key === 'useCategories' && !next && settings.startingPage === 'CATEGORIES') {
+      updateInterfaceSettings({ useCategories: false, startingPage: 'CALENDAR' });
+      return;
+    }
+    updateInterfaceSettings({ [key]: next });
+  };
+
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
@@ -76,7 +91,7 @@ export default function InterfaceSettingsScreen() {
             </Text>
 
             <View style={styles.card}>
-              {STARTING_PAGE_OPTIONS.map((option, index) => {
+              {startingPageOptions.map((option, index) => {
                 const isSelected = settings.startingPage === option.value;
                 return (
                   <Fragment key={option.value}>
@@ -115,7 +130,7 @@ export default function InterfaceSettingsScreen() {
                 <Switch
                   accessibilityLabel={option.label}
                   value={settings[option.key]}
-                  onValueChange={(next) => updateInterfaceSettings({ [option.key]: next })}
+                  onValueChange={(next) => setToggleValue(option.key, next)}
                   trackColor={{ false: colors.disabled, true: colors.primary }}
                   thumbColor={colors.onPrimary}
                   ios_backgroundColor={colors.disabled}
