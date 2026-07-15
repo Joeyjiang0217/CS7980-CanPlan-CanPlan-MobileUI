@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -23,8 +23,10 @@ import { DEFAULT_CATEGORY_COLOR } from '../../features/categories/colors';
 import { useTasksByOwner } from '../../features/tasks/hooks/useTaskApi';
 import type { Category } from '../../shared/api/canplanTypes';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
+import { useSimpleMode } from '../../features/users/hooks/useSimpleMode';
 import type { MainStackParamList } from '../../navigation/types';
 import BackButton from '../../shared/components/BackButton';
+import { useSettingsTapGate } from '../../shared/hooks/useSettingsTapGate';
 import { colors, radius, shadow, spacing, typography } from '../../shared/theme/tokens';
 import CategoryFormModal, { type CategoryFormValues } from './CategoryFormModal';
 
@@ -32,6 +34,11 @@ type CategoriesNavigation = NativeStackNavigationProp<MainStackParamList, 'Categ
 
 export default function CategoriesScreen() {
   const navigation = useNavigation<CategoriesNavigation>();
+  // Simple Mode root form: no back, no edit/add — settings gear behind the
+  // shared 3-tap gate, same as the other simple-mode start pages.
+  const simpleMode = useSimpleMode();
+  const openSettings = useCallback(() => navigation.navigate('Settings'), [navigation]);
+  const { handleSettingsTap, settingsHint } = useSettingsTapGate(openSettings);
   const insets = useSafeAreaInsets();
 
   const [ownerId, setOwnerId] = useState('');
@@ -156,10 +163,36 @@ export default function CategoriesScreen() {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <BackButton onPress={() => navigation.goBack()} variant="dark" />
-        <Text accessibilityRole="header" style={styles.headerTitle}>
-          Categories
-        </Text>
+        {!simpleMode ? (
+          <BackButton onPress={() => navigation.goBack()} variant="dark" />
+        ) : (
+          // Invisible mirror of the settings gear so the title centers.
+          <View style={styles.headerSpacer} />
+        )}
+        {simpleMode && settingsHint ? (
+          <Text accessibilityRole="header" numberOfLines={1} style={styles.headerHint}>
+            {settingsHint}
+          </Text>
+        ) : (
+          <Text
+            accessibilityRole="header"
+            numberOfLines={1}
+            style={[styles.headerTitle, simpleMode ? styles.headerTitleCentered : null]}
+          >
+            Categories
+          </Text>
+        )}
+        {simpleMode ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+            onPress={handleSettingsTap}
+            style={({ pressed }) => [styles.settingsButton, pressed ? styles.pressed : null]}
+            hitSlop={6}
+          >
+            <Ionicons name="settings-outline" size={22} color={colors.text} />
+          </Pressable>
+        ) : null}
       </View>
 
       <ScrollView
@@ -217,21 +250,25 @@ export default function CategoriesScreen() {
                       </View>
                       <Ionicons name="chevron-forward" size={22} color={colors.disabled} />
                     </Pressable>
-                    <View style={styles.editDivider} />
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Edit ${category.name}`}
-                      onPress={() => {
-                        setEditing(category);
-                        setFormMode('edit');
-                      }}
-                      style={({ pressed }) => [
-                        styles.editButton,
-                        pressed ? styles.pressed : null,
-                      ]}
-                    >
-                      <Text style={styles.editText}>Edit</Text>
-                    </Pressable>
+                    {!simpleMode ? (
+                      <>
+                        <View style={styles.editDivider} />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Edit ${category.name}`}
+                          onPress={() => {
+                            setEditing(category);
+                            setFormMode('edit');
+                          }}
+                          style={({ pressed }) => [
+                            styles.editButton,
+                            pressed ? styles.pressed : null,
+                          ]}
+                        >
+                          <Text style={styles.editText}>Edit</Text>
+                        </Pressable>
+                      </>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -239,7 +276,7 @@ export default function CategoriesScreen() {
           </View>
         ) : null}
 
-        {!error && !categoriesQuery.isLoading ? (
+        {!error && !categoriesQuery.isLoading && !simpleMode ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add a category"
@@ -287,6 +324,27 @@ const styles = StyleSheet.create({
     flex: 1,
     ...typography.title,
     color: colors.text,
+  },
+  settingsButton: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceWarm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitleCentered: {
+    textAlign: 'center',
+  },
+  headerSpacer: {
+    width: 44,
+  },
+  // 3-tap settings hint — same look as the simple All Tasks header prompt.
+  headerHint: {
+    flex: 1,
+    ...typography.heading,
+    color: colors.text,
+    textAlign: 'center',
   },
   content: {
     paddingHorizontal: spacing.xl,

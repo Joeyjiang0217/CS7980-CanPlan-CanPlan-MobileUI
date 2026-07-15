@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useMyCategories } from '../../features/categories/hooks/useCategories';
 import { useSimpleMode } from '../../features/users/hooks/useSimpleMode';
+import { useSettingsTapGate } from '../../shared/hooks/useSettingsTapGate';
 import {
   useDeleteTask,
   useTasksByCategory,
@@ -33,7 +34,6 @@ import { colors, radius, shadow, spacing, typography } from '../../shared/theme/
 type AllTasksNavigation = NativeStackNavigationProp<MainStackParamList, 'AllTasks'>;
 type AllTasksRoute = RouteProp<MainStackParamList, 'AllTasks'>;
 
-const SETTINGS_MULTI_TAP_TIMEOUT_MS = 1500;
 
 export default function AllTasksScreen() {
   const navigation = useNavigation<AllTasksNavigation>();
@@ -56,8 +56,8 @@ export default function AllTasksScreen() {
   const [editMode, setEditMode] = useState(false);
   const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
   const deleteTaskMutation = useDeleteTask();
-  const [settingsTapCount, setSettingsTapCount] = useState(0);
-  const settingsTapResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openSettings = useCallback(() => navigation.navigate('Settings'), [navigation]);
+  const { handleSettingsTap, settingsHint } = useSettingsTapGate(openSettings);
   // Only one of these queries is enabled at a time (the other gets an empty id).
   const ownerTasksQuery = useTasksByOwner(categoryMode ? '' : ownerId);
   const categoryTasksQuery = useTasksByCategory(ownerId, categoryId ?? '');
@@ -105,43 +105,6 @@ export default function AllTasksScreen() {
   const categoryColor = categoryId
     ? categoryById.get(categoryId)?.color ?? undefined
     : undefined;
-
-  const clearSettingsTapTimeout = useCallback(() => {
-    if (settingsTapResetTimeoutRef.current) {
-      clearTimeout(settingsTapResetTimeoutRef.current);
-      settingsTapResetTimeoutRef.current = null;
-    }
-  }, []);
-
-  const resetSettingsTapState = useCallback(() => {
-    clearSettingsTapTimeout();
-    setSettingsTapCount(0);
-  }, [clearSettingsTapTimeout]);
-
-  useEffect(() => resetSettingsTapState, [resetSettingsTapState]);
-
-  const handleSettingsPress = useCallback(() => {
-    const nextTapCount = settingsTapCount + 1;
-
-    if (nextTapCount >= 3) {
-      resetSettingsTapState();
-      navigation.navigate('Settings');
-      return;
-    }
-
-    setSettingsTapCount(nextTapCount);
-    clearSettingsTapTimeout();
-    settingsTapResetTimeoutRef.current = setTimeout(() => {
-      setSettingsTapCount(0);
-      settingsTapResetTimeoutRef.current = null;
-    }, SETTINGS_MULTI_TAP_TIMEOUT_MS);
-  }, [clearSettingsTapTimeout, navigation, resetSettingsTapState, settingsTapCount]);
-
-  const simpleModeHeaderMessage = useMemo(() => {
-    if (settingsTapCount === 1) return 'Tap 2 times for settings';
-    if (settingsTapCount === 2) return 'Tap 1 time for settings';
-    return 'All Tasks';
-  }, [settingsTapCount]);
 
   // Drives the edit-mode transition: the delete-badge column animates its
   // width 0 → full, which slides the cards right (and back on exit, after
@@ -211,10 +174,10 @@ export default function AllTasksScreen() {
                 {categoryName ?? 'Tasks'}
               </Text>
             </View>
-          ) : simpleMode && settingsTapCount > 0 ? (
+          ) : simpleMode && settingsHint ? (
             <View style={styles.headerPrompt}>
               <Text accessibilityRole="header" style={styles.headerPromptText} numberOfLines={1}>
-                {simpleModeHeaderMessage}
+                {settingsHint}
               </Text>
             </View>
           ) : (
@@ -234,7 +197,7 @@ export default function AllTasksScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Settings"
-              onPress={handleSettingsPress}
+              onPress={handleSettingsTap}
               style={({ pressed }) => [styles.headerIconButton, pressed ? styles.pressed : null]}
             >
               <Ionicons name="settings-outline" size={22} color={colors.text} />
@@ -358,7 +321,7 @@ export default function AllTasksScreen() {
           </Pressable>
         ) : null}
 
-        {categoryMode || !simpleMode ? (
+        {!simpleMode ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add a task"

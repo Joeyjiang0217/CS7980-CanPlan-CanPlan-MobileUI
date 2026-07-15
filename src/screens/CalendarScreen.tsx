@@ -46,12 +46,14 @@ import {
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
 import { describeRepeat } from '../features/assignments/repeat';
+import { useInterfaceSettings } from '../features/settings/interfaceSettings';
 import {
   useCoverPreviewUriMap,
   useCoverThumbnailUriMap,
 } from '../features/media/hooks/useCoverThumbnails';
 import { useMediaDownloadUrl, useMediaDownloadUrlMap } from '../features/media/hooks/useMedia';
 import { useTasksByOwner, useTaskSteps } from '../features/tasks/hooks/useTaskApi';
+import { useSettingsTapGate } from '../shared/hooks/useSettingsTapGate';
 import type { MainStackParamList } from '../navigation/types';
 import { getCurrentUserId } from '../shared/api/authTokenProvider';
 import type {
@@ -1591,6 +1593,12 @@ export default function CalendarScreen() {
 
   const today = useToday();
   const selectedISO = toISODate(selected);
+  const { allowChangingDate, simpleMode } = useInterfaceSettings();
+
+  // Simple Mode: no back, no add — only a settings gear guarded by the same
+  // 3-tap sequence as the simple All Tasks screen (accidental-tap protection).
+  const openSettings = useCallback(() => navigation.navigate('Settings'), [navigation]);
+  const { handleSettingsTap, settingsHint } = useSettingsTapGate(openSettings);
 
   const dayViewsQuery = useTaskInstanceViews(ownerId, selectedISO, selectedISO);
   const tasksQuery = useTasksByOwner(ownerId);
@@ -1799,6 +1807,15 @@ export default function CalendarScreen() {
     [],
   );
 
+  // "Allow Changing Date in Calendar" off → the calendar is pinned to today:
+  // week strip and month picker are hidden, the day pager can't swipe, and
+  // this effect snaps back to today (also following it across midnight).
+  useEffect(() => {
+    if (!allowChangingDate && !isSameDay(visualSelected, today)) {
+      handleSelectDate(today);
+    }
+  }, [allowChangingDate, visualSelected, today, handleSelectDate]);
+
   const openOccurrence = useCallback(
     (view: TaskInstanceView) => {
       // The views feed can lag a just-made start or status change (the chip
@@ -1845,29 +1862,72 @@ export default function CalendarScreen() {
     <View style={styles.root}>
       <View style={[styles.topArea, { paddingTop: insets.top + spacing.sm }]}>
         <View style={styles.header}>
-          <BackButton onPress={() => navigation.goBack()} variant="dark" />
-          <Text accessibilityRole="header" style={styles.headerTitle}>
-            Calendar
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open month calendar"
-            onPress={() => setMonthPickerVisible(true)}
-            style={({ pressed }) => [styles.eyeButton, pressed ? styles.chipPressed : null]}
-            hitSlop={6}
-          >
-            <Ionicons name="eye-outline" size={24} color={colors.text} />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Add a task"
-            onPress={() => setAddChoiceVisible(true)}
-            style={({ pressed }) => [styles.addButton, pressed ? styles.addButtonPressed : null]}
-          >
-            <Ionicons name="add" size={30} color={colors.onPrimary} />
-          </Pressable>
+          {!simpleMode ? (
+            <BackButton onPress={() => navigation.goBack()} variant="dark" />
+          ) : (
+            // Invisible mirror of the right-side buttons (44pt each + row gap)
+            // so the centered title sits on the true screen centerline.
+            <View style={{ width: allowChangingDate ? 88 + spacing.sm : 44 }} />
+          )}
+          {simpleMode && settingsHint ? (
+            <Text
+              accessibilityRole="header"
+              numberOfLines={1}
+              style={styles.headerSettingsHint}
+            >
+              {settingsHint}
+            </Text>
+          ) : (
+            <Text
+              accessibilityRole="header"
+              numberOfLines={1}
+              style={[styles.headerTitle, simpleMode ? styles.headerTitleCentered : null]}
+            >
+              Calendar
+            </Text>
+          )}
+          {allowChangingDate ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open month calendar"
+              onPress={() => setMonthPickerVisible(true)}
+              style={({ pressed }) => [styles.eyeButton, pressed ? styles.chipPressed : null]}
+              hitSlop={6}
+            >
+              <Ionicons name="eye-outline" size={24} color={colors.text} />
+            </Pressable>
+          ) : null}
+          {simpleMode ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
+              onPress={handleSettingsTap}
+              style={({ pressed }) => [styles.eyeButton, pressed ? styles.chipPressed : null]}
+              hitSlop={6}
+            >
+              <Ionicons name="settings-outline" size={22} color={colors.text} />
+            </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add a task"
+              onPress={() => setAddChoiceVisible(true)}
+              style={({ pressed }) => [styles.addButton, pressed ? styles.addButtonPressed : null]}
+            >
+              <Ionicons name="add" size={30} color={colors.onPrimary} />
+            </Pressable>
+          )}
         </View>
 
+        {!allowChangingDate ? (
+          <Text
+            accessibilityRole="header"
+            accessibilityLabel={`Today, ${formatShortDate(toISODate(today))}`}
+            style={styles.lockedTodayLabel}
+          >
+            {formatShortDate(toISODate(today))}
+          </Text>
+        ) : (
         <View style={styles.weekStrip}>
           {weekDays.map((day) => {
             const isSelected = isSameDay(day, visualSelected);
@@ -1910,6 +1970,7 @@ export default function CalendarScreen() {
             );
           })}
         </View>
+        )}
       </View>
 
       <View
@@ -1922,6 +1983,8 @@ export default function CalendarScreen() {
             data={pages}
             horizontal
             pagingEnabled
+            // Locked to today: swiping between days is date changing too.
+            scrollEnabled={allowChangingDate}
             showsHorizontalScrollIndicator={false}
             keyExtractor={(date) => toISODate(date)}
             initialScrollIndex={initialDayPagerIndex}
@@ -2072,6 +2135,17 @@ const styles = StyleSheet.create({
     ...typography.title,
     color: colors.text,
   },
+  headerTitleCentered: {
+    textAlign: 'center',
+  },
+  // 3-tap settings hint — same look as the simple All Tasks header prompt.
+  headerSettingsHint: {
+    flex: 1,
+    marginLeft: spacing.sm,
+    ...typography.heading,
+    color: colors.text,
+    textAlign: 'center',
+  },
   eyeButton: {
     width: 44,
     height: 44,
@@ -2097,6 +2171,13 @@ const styles = StyleSheet.create({
   },
   weekStrip: {
     flexDirection: 'row',
+    marginTop: spacing.lg,
+  },
+  // Replaces the week strip when date changing is disabled: just today's date.
+  lockedTodayLabel: {
+    ...typography.heading,
+    color: colors.text,
+    textAlign: 'center',
     marginTop: spacing.lg,
   },
   weekCell: {
