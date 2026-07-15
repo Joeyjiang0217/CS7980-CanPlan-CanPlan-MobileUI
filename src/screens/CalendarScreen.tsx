@@ -46,7 +46,10 @@ import {
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
 import { describeRepeat } from '../features/assignments/repeat';
-import { useInterfaceSettings } from '../features/settings/interfaceSettings';
+import {
+  getInterfaceSettings,
+  useInterfaceSettings,
+} from '../features/settings/interfaceSettings';
 import {
   useCoverPreviewUriMap,
   useCoverThumbnailUriMap,
@@ -70,6 +73,33 @@ import { colors, radius, shadow, spacing, typography } from '../shared/theme/tok
 type CalendarNavigation = NativeStackNavigationProp<MainStackParamList, 'Calendar'>;
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** How far back the Show Overdue on Launch list reaches (today-7 … yesterday). */
+const PAST_OVERDUE_DAYS = 7;
+
+/**
+ * Which status tab the calendar opens on. Consumed once per JS process (a
+ * true cold start): Show Overdue on Launch lands on the Overdue tab only in
+ * the locked Simple Mode calendar, and Only Show Today's Tasks suppresses it
+ * entirely. Later mounts (Settings round-trips, stack rebuilds) keep To Do.
+ */
+let launchTabDecided = false;
+function initialCalendarTab(): StatusKey {
+  if (launchTabDecided) {
+    return 'todo';
+  }
+  launchTabDecided = true;
+  const settings = getInterfaceSettings();
+  return settings.simpleMode &&
+    settings.startingPage === 'CALENDAR' &&
+    !settings.allowChangingDate &&
+    settings.showOverdue &&
+    !settings.onlyToday
+    ? 'overdue'
+    : 'todo';
+}
+
+const NO_PAST_OVERDUE: TaskInstanceView[] = [];
 
 type StatusKey = 'overdue' | 'todo' | 'done' | 'skipped';
 
@@ -1237,6 +1267,7 @@ function DayAssignmentsPage({
   height,
   ownerId,
   activeStatus,
+  pastOverdueViews,
   coverByTask,
   coverThumbnailUriByTask,
   coverPreviewUriByTask,
@@ -1251,6 +1282,8 @@ function DayAssignmentsPage({
   height: number;
   ownerId: string;
   activeStatus: StatusKey;
+  /** Past week's unresolved occurrences (today's page, Show Overdue mode only). */
+  pastOverdueViews: readonly TaskInstanceView[];
   coverByTask: Map<string, string | null | undefined>;
   coverThumbnailUriByTask: ReadonlyMap<string, string | null>;
   coverPreviewUriByTask: ReadonlyMap<string, string | null>;
@@ -1417,14 +1450,48 @@ function DayAssignmentsPage({
     | { kind: 'loading'; key: string }
     | { kind: 'message'; key: string; message: string }
     | { kind: 'header'; key: string; hour: number }
+    | { kind: 'dayheader'; key: string; label: string }
     | { kind: 'task'; key: string; view: TaskInstanceView };
 
   const rows = useMemo<DayRow[]>(() => {
+    // Show Overdue mode appends the past week's unresolved occurrences under
+    // per-day section labels, most recent day first (today's own hour-slot
+    // groups stay on top).
+    const pastRows: DayRow[] = [];
+    if (activeStatus === 'overdue' && pastOverdueViews.length > 0) {
+      const byDate = new Map<string, TaskInstanceView[]>();
+      for (const view of pastOverdueViews) {
+        const list = byDate.get(view.scheduledDate);
+        if (list) {
+          list.push(view);
+        } else {
+          byDate.set(view.scheduledDate, [view]);
+        }
+      }
+      const yesterdayISO = toISODate(addDays(today, -1));
+      for (const dayISO of [...byDate.keys()].sort().reverse()) {
+        pastRows.push({
+          kind: 'dayheader',
+          key: `day-${dayISO}`,
+          label: dayISO === yesterdayISO ? 'Yesterday' : formatShortDate(dayISO),
+        });
+        const dayViews = byDate.get(dayISO)!;
+        dayViews.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
+        for (const view of dayViews) {
+          pastRows.push({
+            kind: 'task',
+            key: `${view.assignmentId}-${view.scheduledFor}`,
+            view,
+          });
+        }
+      }
+    }
+
     if (isLoading) return [{ kind: 'loading', key: 'loading' }];
     if (viewsQuery.isError) {
       return [{ kind: 'message', key: 'error', message: 'Could not load this day’s tasks.' }];
     }
-    if (views.length === 0) {
+    if (views.length === 0 && pastRows.length === 0) {
       return [{ kind: 'message', key: 'empty', message: 'Nothing here for this day.' }];
     }
 
@@ -1439,8 +1506,9 @@ function DayAssignmentsPage({
         });
       }
     }
+    nextRows.push(...pastRows);
     return nextRows;
-  }, [groups, isLoading, views.length, viewsQuery.isError]);
+  }, [groups, isLoading, views.length, viewsQuery.isError, activeStatus, pastOverdueViews, today]);
 
   const renderRow = useCallback(
     ({ item }: { item: DayRow }) => {
@@ -1452,6 +1520,9 @@ function DayAssignmentsPage({
       }
       if (item.kind === 'header') {
         return <Text style={styles.slotHeader}>{slotLabel(item.hour)}</Text>;
+      }
+      if (item.kind === 'dayheader') {
+        return <Text style={styles.slotHeader}>{item.label}</Text>;
       }
 
       const view = item.view;
@@ -1574,7 +1645,7 @@ export default function CalendarScreen() {
   const [ownerId, setOwnerId] = useState('');
   const [selected, setSelected] = useState(() => new Date());
   const [visualSelected, setVisualSelected] = useState(() => new Date());
-  const [activeStatus, setActiveStatus] = useState<StatusKey>('todo');
+  const [activeStatus, setActiveStatus] = useState<StatusKey>(initialCalendarTab);
   const [monthPickerVisible, setMonthPickerVisible] = useState(false);
   const [addChoiceVisible, setAddChoiceVisible] = useState(false);
   const [pagerHeight, setPagerHeight] = useState(0);
@@ -1593,7 +1664,18 @@ export default function CalendarScreen() {
 
   const today = useToday();
   const selectedISO = toISODate(selected);
-  const { allowChangingDate, simpleMode } = useInterfaceSettings();
+  const { allowChangingDate, simpleMode, startingPage, showOverdue, onlyToday } =
+    useInterfaceSettings();
+
+  // Show Overdue on Launch data scope: the locked Simple Mode calendar's
+  // Overdue tab also carries the past week's unresolved occurrences. Only
+  // Show Today's Tasks fully suppresses this.
+  const includePastOverdue =
+    simpleMode &&
+    startingPage === 'CALENDAR' &&
+    !allowChangingDate &&
+    showOverdue &&
+    !onlyToday;
 
   // Simple Mode: no back, no add — only a settings gear guarded by the same
   // 3-tap sequence as the simple All Tasks screen (accidental-tap protection).
@@ -1653,6 +1735,26 @@ export default function CalendarScreen() {
   // minuteTick keeps the bucket split (and the footer counts) flipping to do →
   // overdue live as scheduled moments pass.
   const minuteTick = useMinuteTick();
+
+  // The past week's feed, fetched only in Show Overdue mode (empty ownerId
+  // disables the query otherwise).
+  const pastOverdueQuery = useTaskInstanceViews(
+    includePastOverdue ? ownerId : '',
+    toISODate(addDays(today, -PAST_OVERDUE_DAYS)),
+    toISODate(addDays(today, -1)),
+  );
+  const pastOverdueViews = useMemo(() => {
+    if (!includePastOverdue) {
+      return NO_PAST_OVERDUE;
+    }
+    return (pastOverdueQuery.data?.items ?? []).filter((view) => {
+      const override = statusOverrides.get(
+        occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
+      );
+      return liveStatus(view, override ?? view.status) === 'OVERDUE';
+    });
+  }, [includePastOverdue, pastOverdueQuery.data, statusOverrides, minuteTick]);
+
   const buckets = useMemo(() => {
     const result: Record<StatusKey, TaskInstanceView[]> = {
       overdue: [],
@@ -1669,8 +1771,10 @@ export default function CalendarScreen() {
         result[key].push(view);
       }
     }
+    // Footer count stays in step with the Overdue tab's list content.
+    result.overdue.push(...pastOverdueViews);
     return result;
-  }, [dayViewsQuery.data, statusOverrides, minuteTick]);
+  }, [dayViewsQuery.data, statusOverrides, minuteTick, pastOverdueViews]);
 
   // Horizontal pager: keep three weeks of lightweight positions, but render
   // real task pages only for dates the user has actually opened.
@@ -2013,6 +2117,9 @@ export default function CalendarScreen() {
                   height={pagerHeight}
                   ownerId={ownerId}
                   activeStatus={activeStatus}
+                  pastOverdueViews={
+                    isSameDay(item, today) ? pastOverdueViews : NO_PAST_OVERDUE
+                  }
                   coverByTask={coverByTask}
                   coverThumbnailUriByTask={coverThumbnailUriByTask}
                   coverPreviewUriByTask={coverPreviewUriByTask}
