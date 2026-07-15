@@ -39,14 +39,21 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { simpleMode, startingPage } = useInterfaceSettings();
 
-  // Leaving Settings lands on the currently effective root rather than
-  // whatever the stack held when Settings was opened — flipping Simple Mode
-  // in here must change where "back" goes (e.g. Home → simple All Tasks).
+  // Leaving Settings lands on the currently effective root. Two cases:
+  //  - root unchanged (the common one — user tweaked ordinary settings):
+  //    plain pop back to it, with the normal right-slide back animation;
+  //  - root changed (Simple Mode flipped in this visit, Home ↔ simple start
+  //    page): the stack bottom is stale, so rebuild it — reset's forward
+  //    animation reads fine here because the destination genuinely is a new
+  //    screen.
   const handleBack = () => {
-    navigation.reset({
-      index: 0,
-      routes: [{ name: simpleMode ? startingPageRouteName(startingPage) : 'Home' }],
-    });
+    const targetRoot = simpleMode ? startingPageRouteName(startingPage) : 'Home';
+    const stackRoot = navigation.getState()?.routes[0]?.name;
+    if (stackRoot === targetRoot) {
+      navigation.popToTop();
+    } else {
+      navigation.reset({ index: 0, routes: [{ name: targetRoot }] });
+    }
   };
 
   return (
