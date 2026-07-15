@@ -101,6 +101,21 @@ function initialCalendarTab(): StatusKey {
 
 const NO_PAST_OVERDUE: TaskInstanceView[] = [];
 
+/** "2026-07-13" → "Sunday" (past-week group labels; unique within 7 days). */
+const weekdayName = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
+};
+
+/** "2026-07-13" → "Jul 13" (the date suffix on group labels). */
+const monthDay = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+};
+
 type StatusKey = 'overdue' | 'todo' | 'done' | 'skipped';
 
 const STATUS_TABS: Array<{ key: StatusKey; label: string }> = [
@@ -1450,13 +1465,34 @@ function DayAssignmentsPage({
     | { kind: 'loading'; key: string }
     | { kind: 'message'; key: string; message: string }
     | { kind: 'header'; key: string; hour: number }
-    | { kind: 'dayheader'; key: string; label: string }
+    | {
+        kind: 'dayheader';
+        key: string;
+        dayISO: string;
+        label: string;
+        /** "started/total" for the group, QQ-roster style. */
+        count: string;
+        expanded: boolean;
+      }
     | { kind: 'task'; key: string; view: TaskInstanceView };
 
+  // Collapsible past-day groups: an explicit tap wins; otherwise only the
+  // default group is open. Session-only by design (resets on relaunch).
+  const [groupToggles, setGroupToggles] = useState<ReadonlyMap<string, boolean>>(
+    new Map(),
+  );
+  const toggleGroup = useCallback((dayISO: string, expanded: boolean) => {
+    setGroupToggles((current) => {
+      const next = new Map(current);
+      next.set(dayISO, !expanded);
+      return next;
+    });
+  }, []);
+
   const rows = useMemo<DayRow[]>(() => {
-    // Show Overdue mode appends the past week's unresolved occurrences under
-    // per-day section labels, most recent day first (today's own hour-slot
-    // groups stay on top).
+    // Show Overdue mode appends the past week's unresolved occurrences as
+    // collapsible per-day groups, most recent day first (today's own
+    // hour-slot groups stay on top, ungrouped).
     const pastRows: DayRow[] = [];
     if (activeStatus === 'overdue' && pastOverdueViews.length > 0) {
       const byDate = new Map<string, TaskInstanceView[]>();
@@ -1468,21 +1504,38 @@ function DayAssignmentsPage({
           byDate.set(view.scheduledDate, [view]);
         }
       }
+      const sortedDays = [...byDate.keys()].sort().reverse();
+      // Today's overdue already sits expanded above, so a default-open group
+      // is only offered when today has none: the newest non-empty past day.
+      const defaultExpandedDay = views.length > 0 ? null : sortedDays[0] ?? null;
       const yesterdayISO = toISODate(addDays(today, -1));
-      for (const dayISO of [...byDate.keys()].sort().reverse()) {
+      for (const dayISO of sortedDays) {
+        const dayViews = byDate.get(dayISO)!;
+        dayViews.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
+        const startedCount = dayViews.filter(
+          (view) =>
+            !view.isVirtual ||
+            instanceIdOverrides.has(
+              occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
+            ),
+        ).length;
+        const expanded = groupToggles.get(dayISO) ?? dayISO === defaultExpandedDay;
         pastRows.push({
           kind: 'dayheader',
           key: `day-${dayISO}`,
-          label: dayISO === yesterdayISO ? 'Yesterday' : formatShortDate(dayISO),
+          dayISO,
+          label: `${dayISO === yesterdayISO ? 'Yesterday' : weekdayName(dayISO)} · ${monthDay(dayISO)}`,
+          count: `${startedCount}/${dayViews.length}`,
+          expanded,
         });
-        const dayViews = byDate.get(dayISO)!;
-        dayViews.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
-        for (const view of dayViews) {
-          pastRows.push({
-            kind: 'task',
-            key: `${view.assignmentId}-${view.scheduledFor}`,
-            view,
-          });
+        if (expanded) {
+          for (const view of dayViews) {
+            pastRows.push({
+              kind: 'task',
+              key: `${view.assignmentId}-${view.scheduledFor}`,
+              view,
+            });
+          }
         }
       }
     }
@@ -1508,7 +1561,28 @@ function DayAssignmentsPage({
     }
     nextRows.push(...pastRows);
     return nextRows;
-  }, [groups, isLoading, views.length, viewsQuery.isError, activeStatus, pastOverdueViews, today]);
+  }, [
+    groups,
+    isLoading,
+    views.length,
+    viewsQuery.isError,
+    activeStatus,
+    pastOverdueViews,
+    today,
+    groupToggles,
+    instanceIdOverrides,
+  ]);
+
+  // Pin the day-group headers while their group scrolls (QQ-roster style).
+  const stickyHeaderIndices = useMemo(() => {
+    const indices: number[] = [];
+    rows.forEach((row, index) => {
+      if (row.kind === 'dayheader') {
+        indices.push(index);
+      }
+    });
+    return indices;
+  }, [rows]);
 
   const renderRow = useCallback(
     ({ item }: { item: DayRow }) => {
@@ -1522,7 +1596,26 @@ function DayAssignmentsPage({
         return <Text style={styles.slotHeader}>{slotLabel(item.hour)}</Text>;
       }
       if (item.kind === 'dayheader') {
-        return <Text style={styles.slotHeader}>{item.label}</Text>;
+        return (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: item.expanded }}
+            accessibilityLabel={`${item.label}, ${item.count} tasks`}
+            onPress={() => toggleGroup(item.dayISO, item.expanded)}
+            style={({ pressed }) => [
+              styles.dayGroupHeader,
+              pressed ? styles.dayGroupHeaderPressed : null,
+            ]}
+          >
+            <Ionicons
+              name={item.expanded ? 'chevron-down' : 'chevron-forward'}
+              size={18}
+              color={colors.textMuted}
+            />
+            <Text style={styles.dayGroupLabel}>{item.label}</Text>
+            <Text style={styles.dayGroupCount}>{item.count}</Text>
+          </Pressable>
+        );
       }
 
       const view = item.view;
@@ -1592,6 +1685,7 @@ function DayAssignmentsPage({
       statusOverrides,
       todayISO,
       minuteTick,
+      toggleGroup,
     ],
   );
 
@@ -1603,9 +1697,14 @@ function DayAssignmentsPage({
         data={rows}
         keyExtractor={(item) => item.key}
         renderItem={renderRow}
-        initialNumToRender={6}
-        maxToRenderPerBatch={4}
-        windowSize={5}
+        stickyHeaderIndices={stickyHeaderIndices.length > 0 ? stickyHeaderIndices : undefined}
+        // Sticky group headers break under cell recycling (rows blank out
+        // near the end and scroll-up jumps back to the group top), so with
+        // groups present every row stays mounted — collapsed groups keep the
+        // row count small. The plain ungrouped day keeps the lean window.
+        initialNumToRender={stickyHeaderIndices.length > 0 ? rows.length : 6}
+        maxToRenderPerBatch={stickyHeaderIndices.length > 0 ? rows.length : 4}
+        windowSize={stickyHeaderIndices.length > 0 ? 31 : 5}
         showsVerticalScrollIndicator={false}
       />
       <ConfirmDialog
@@ -2403,6 +2502,27 @@ const styles = StyleSheet.create({
   slotHeader: {
     ...typography.heading,
     color: colors.text,
+  },
+  // Collapsible past-day group header. Opaque background so cards scroll
+  // cleanly underneath while it's stuck to the top.
+  dayGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.bg,
+    paddingVertical: spacing.sm,
+  },
+  dayGroupHeaderPressed: {
+    opacity: 0.6,
+  },
+  dayGroupLabel: {
+    flex: 1,
+    ...typography.heading,
+    color: colors.text,
+  },
+  dayGroupCount: {
+    ...typography.body,
+    color: colors.textMuted,
   },
   taskCard: {
     backgroundColor: colors.surface,
