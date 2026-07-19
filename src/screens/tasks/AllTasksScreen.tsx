@@ -31,7 +31,14 @@ export default function AllTasksScreen() {
   const categoryName = route.params?.categoryName;
   const categoryMode = Boolean(categoryId);
 
-  const [ownerId, setOwnerId] = useState('');
+  // Caregiver delegated view: a linked primary user's tasks, read-only.
+  const managedOwnerId = route.params?.ownerId;
+  const managingName = route.params?.managingName;
+  const managed = Boolean(managedOwnerId);
+  // The caregiver's own Simple Mode must not shape a delegated patient view.
+  const showSimple = simpleMode && !managed;
+
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [identityError, setIdentityError] = useState<string>();
   const [settingsTapCount, setSettingsTapCount] = useState(0);
   const settingsTapResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -39,9 +46,16 @@ export default function AllTasksScreen() {
   const ownerTasksQuery = useTasksByOwner(categoryMode ? '' : ownerId);
   const categoryTasksQuery = useTasksByCategory(ownerId, categoryId ?? '');
   const tasksQuery = categoryMode ? categoryTasksQuery : ownerTasksQuery;
-  const categoriesQuery = useMyCategories(Boolean(ownerId));
+  const categoriesQuery = useMyCategories(Boolean(ownerId), 50, managedOwnerId);
 
   useEffect(() => {
+    // In managed mode the owner is the primary user from the route — don't
+    // overwrite it with the signed-in caregiver's own id.
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
+
     let mounted = true;
 
     void getCurrentUserId()
@@ -61,7 +75,7 @@ export default function AllTasksScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   const tasks = useMemo(
     () => tasksQuery.data?.pages.flatMap((page) => page.items) ?? [],
@@ -132,7 +146,7 @@ export default function AllTasksScreen() {
       >
         {/* Category view and normal mode show Back; Simple Mode root has none. */}
         <View style={styles.headerSide}>
-          {categoryMode || !simpleMode ? (
+          {categoryMode || managed || !showSimple ? (
             <BackButton onPress={() => navigation.goBack()} variant="dark" />
           ) : (
             <View style={styles.headerPlaceholder} />
@@ -150,7 +164,7 @@ export default function AllTasksScreen() {
                 {categoryName ?? 'Tasks'}
               </Text>
             </View>
-          ) : simpleMode && settingsTapCount > 0 ? (
+          ) : showSimple && settingsTapCount > 0 ? (
             <View style={styles.headerPrompt}>
               <Text accessibilityRole="header" style={styles.headerPromptText} numberOfLines={1}>
                 {simpleModeHeaderMessage}
@@ -166,10 +180,10 @@ export default function AllTasksScreen() {
           style={[
             styles.headerSide,
             styles.headerSideRight,
-            !categoryMode && !simpleMode ? styles.headerSideWide : null,
+            !categoryMode && !managed && !showSimple ? styles.headerSideWide : null,
           ]}
         >
-          {categoryMode ? null : simpleMode ? (
+          {categoryMode || managed ? null : showSimple ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Settings"
@@ -200,6 +214,15 @@ export default function AllTasksScreen() {
           )}
         </View>
       </View>
+
+      {managed ? (
+        <View style={styles.banner}>
+          <Ionicons name="people" size={16} color={colors.primary} />
+          <Text style={styles.bannerText} numberOfLines={1}>
+            Managing {managingName ?? 'this person'} · view only
+          </Text>
+        </View>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xxl }]}
@@ -257,7 +280,7 @@ export default function AllTasksScreen() {
           </Pressable>
         ) : null}
 
-        {categoryMode || !simpleMode ? (
+        {!managed && (categoryMode || !showSimple) ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add a task"
@@ -355,6 +378,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.surfaceWarm,
+  },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.xl,
+    marginBottom: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceWarm,
+  },
+  bannerText: {
+    ...typography.bodyStrong,
+    color: colors.text,
+    flexShrink: 1,
   },
   content: {
     paddingHorizontal: spacing.xl,

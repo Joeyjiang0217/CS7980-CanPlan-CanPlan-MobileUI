@@ -20,7 +20,6 @@ import type {
   CreateMediaAssetInput,
   CreateMediaUploadUrlInput,
   CreateMyUserProfileInput,
-  CreateSupportLinkInput,
   CreateTaskCoverImageUploadUrlInput,
   CreateTaskInput,
   CreateTaskStepInput,
@@ -38,8 +37,10 @@ import type {
   PageInput,
   ReorderTaskStepsInput,
   Report,
+  SelectPrimaryUserInput,
   SetAssignmentStepCompletionInput,
   SupportLink,
+  UnselectPrimaryUserInput,
   Task,
   TaskStep,
   TaskStepsResponse,
@@ -53,10 +54,6 @@ import type {
 
 type RawUserProfile = Omit<UserProfile, 'accessibilitySettings'> & {
   accessibilitySettings?: string | null;
-};
-
-type RawSupportLink = Omit<SupportLink, 'permissions'> & {
-  permissions?: string | null;
 };
 
 function parseAwsJson(
@@ -87,13 +84,6 @@ function mapUserProfile(profile: RawUserProfile): UserProfile {
       profile.accessibilitySettings,
       'UserProfile.accessibilitySettings',
     ),
-  };
-}
-
-function mapSupportLink(link: RawSupportLink): SupportLink {
-  return {
-    ...link,
-    permissions: parseAwsJson(link.permissions, 'SupportLink.permissions'),
   };
 }
 
@@ -158,22 +148,35 @@ export const canPlanApi = {
     return mapConnection(data.listUsersByOrganization, mapUserProfile);
   },
 
-  async listPrimaryUsersBySupporter(
-    supporterId: string,
-    page: PageInput = {},
-  ): Promise<Connection<SupportLink>> {
+  /** Primary users the caller (a SupportPerson) currently has an effective link to. */
+  async listMySupportList(page: PageInput = {}): Promise<Connection<SupportLink>> {
     const data = await graphqlRequest<
-      { listPrimaryUsersBySupporter: Connection<RawSupportLink> },
-      { supporterId: string } & PageInput
-    >(operations.LIST_PRIMARY_USERS_BY_SUPPORTER, { supporterId, ...pageVariables(page) });
-    return mapConnection(data.listPrimaryUsersBySupporter, mapSupportLink);
+      { listMySupportList: Connection<SupportLink> },
+      PageInput
+    >(operations.LIST_MY_SUPPORT_LIST, pageVariables(page));
+    return data.listMySupportList;
   },
 
-  async listMyCategories(page: PageInput = {}): Promise<Connection<Category>> {
+  /** Members of the caller's own organization (used to find primary users to link). */
+  async listMyOrganizationUsers(
+    page: PageInput = {},
+  ): Promise<Connection<UserProfile>> {
+    const data = await graphqlRequest<
+      { listMyOrganizationUsers: Connection<RawUserProfile> },
+      PageInput
+    >(operations.LIST_MY_ORGANIZATION_USERS, pageVariables(page));
+    return mapConnection(data.listMyOrganizationUsers, mapUserProfile);
+  },
+
+  /** Delegated: pass a primary user's id to read their categories; omit for the caller's own. */
+  async listMyCategories(
+    userId?: string,
+    page: PageInput = {},
+  ): Promise<Connection<Category>> {
     const data = await graphqlRequest<
       { listMyCategories: Connection<Category> },
-      PageInput
-    >(operations.LIST_MY_CATEGORIES, pageVariables(page));
+      { userId?: string } & PageInput
+    >(operations.LIST_MY_CATEGORIES, { userId, ...pageVariables(page) });
     return data.listMyCategories;
   },
 
@@ -319,17 +322,22 @@ export const canPlanApi = {
     return mapUserProfile(data.updateMyUserProfile);
   },
 
-  async createSupportLink(input: CreateSupportLinkInput): Promise<SupportLink | null> {
+  /** Establish (or restore) the caller's support link to a primary user in the same org. */
+  async selectPrimaryUser(primaryUserId: string): Promise<SupportLink> {
     const data = await graphqlRequest<
-      { createSupportLink: RawSupportLink | null },
-      { input: Omit<CreateSupportLinkInput, 'permissions'> & { permissions?: string } }
-    >(operations.CREATE_SUPPORT_LINK, {
-      input: {
-        ...input,
-        permissions: toAwsJson(input.permissions),
-      },
-    });
-    return data.createSupportLink ? mapSupportLink(data.createSupportLink) : null;
+      { selectPrimaryUser: SupportLink },
+      { input: SelectPrimaryUserInput }
+    >(operations.SELECT_PRIMARY_USER, { input: { primaryUserId } });
+    return data.selectPrimaryUser;
+  },
+
+  /** Soft-revoke the caller's support link to a primary user. */
+  async unselectPrimaryUser(primaryUserId: string): Promise<SupportLink> {
+    const data = await graphqlRequest<
+      { unselectPrimaryUser: SupportLink },
+      { input: UnselectPrimaryUserInput }
+    >(operations.UNSELECT_PRIMARY_USER, { input: { primaryUserId } });
+    return data.unselectPrimaryUser;
   },
 
   async createCategory(input: CreateCategoryInput): Promise<Category | null> {

@@ -37,7 +37,6 @@ export interface SupportLink {
   primaryUserId: string;
   userId: string;
   status: SupportLinkStatus;
-  permissions?: JsonValue | null;
   createdAt: string;
   updatedAt?: string | null;
 }
@@ -214,21 +213,32 @@ export interface UpdateMyUserProfileInput {
   accessibilitySettings?: JsonValue | null;
 }
 
-export interface CreateSupportLinkInput {
-  supporterId: string;
+/**
+ * Establish (or restore) the caller's support link to a primary user. The
+ * supporter is the authenticated caller; both must belong to the same
+ * organization. Replaces the removed `createSupportLink`.
+ */
+export interface SelectPrimaryUserInput {
   primaryUserId: string;
-  status?: SupportLinkStatus | null;
-  permissions?: JsonValue;
+}
+
+/** Soft-revoke the caller's support link to a primary user. */
+export interface UnselectPrimaryUserInput {
+  primaryUserId: string;
 }
 
 export interface CreateCategoryInput {
   name: string;
   color?: string | null;
   sortOrder?: number | null;
+  /** Delegated: target primary user's id. Omitted ⇒ acts on the caller's own. */
+  userId?: string | null;
 }
 
 export interface UpdateCategoryInput {
   categoryId: string;
+  /** Delegated: target primary user's id. Omitted ⇒ acts on the caller's own. */
+  userId?: string | null;
   /** Omitted ⇒ unchanged. Rejected for the default category and for null. */
   name?: string;
   /** Omitted ⇒ unchanged; explicit null ⇒ cleared. */
@@ -239,6 +249,8 @@ export interface UpdateCategoryInput {
 
 export interface DeleteCategoryInput {
   categoryId: string;
+  /** Delegated: target primary user's id. Omitted ⇒ acts on the caller's own. */
+  userId?: string | null;
 }
 
 export interface TaskScheduleInput {
@@ -256,6 +268,8 @@ export interface CreateTaskStepNestedInput {
 
 export interface CreateTaskInput {
   title: string;
+  /** Delegated: create this template owned by the target primary user. Omitted ⇒ the caller. */
+  userId?: string | null;
   categoryId?: string | null;
   description?: string | null;
   scheduleRule?: string | null;

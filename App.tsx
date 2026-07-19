@@ -22,6 +22,8 @@ import SignInScreen from './src/screens/auth/SignInScreen';
 import VerifyEmailScreen from './src/screens/auth/VerifyEmailScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import CaregiverHomeScreen from './src/screens/caregiver/CaregiverHomeScreen';
+import PatientOverviewScreen from './src/screens/caregiver/PatientOverviewScreen';
 import CategoriesScreen from './src/screens/categories/CategoriesScreen';
 import ReportsScreen from './src/screens/reports/ReportsScreen';
 import ReportViewScreen from './src/screens/reports/ReportViewScreen';
@@ -69,11 +71,20 @@ function RootStack() {
   const isAuthed = !!currentUser || isGuest;
   const needsOnboarding = !!currentUser && !isGuest && profile == null;
   const simpleMode = readSimpleMode(profile?.accessibilitySettings);
+  // Caregivers (support persons) land on their own dashboard — the list of
+  // people they support — rather than the patient Home. Role is derived from
+  // the real profile, so there is no manual "role chooser" screen.
+  const isCaregiver = profile?.role === 'SUPPORT_PERSON';
+  const mainInitialRoute = isCaregiver
+    ? 'CaregiverHome'
+    : simpleMode
+      ? 'AllTasks'
+      : 'Home';
 
   return (
     <Stack.Navigator
       screenOptions={{ headerShown: false }}
-      initialRouteName={simpleMode ? 'AllTasks' : 'Home'}
+      initialRouteName={mainInitialRoute}
     >
       {!isAuthed ? (
         <>
@@ -91,6 +102,8 @@ function RootStack() {
       ) : (
         <>
           <Stack.Screen name="Home" component={HomeScreen} />
+          <Stack.Screen name="CaregiverHome" component={CaregiverHomeScreen} />
+          <Stack.Screen name="PatientOverview" component={PatientOverviewScreen} />
           <Stack.Screen name="Settings" component={SettingsScreen} />
           <Stack.Screen name="Categories" component={CategoriesScreen} />
           <Stack.Screen name="AllTasks" component={AllTasksScreen} />

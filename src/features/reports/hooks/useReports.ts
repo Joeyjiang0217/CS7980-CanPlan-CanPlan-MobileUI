@@ -67,10 +67,9 @@ export function useLinkedPrimaryUsers(supporterId: string) {
       const links: SupportLink[] = [];
       let nextToken: string | undefined;
       do {
-        const page = await canPlanApi.listPrimaryUsersBySupporter(supporterId, {
-          limit: 50,
-          nextToken,
-        });
+        // Effective (currently-actionable) support links for the signed-in
+        // supporter; the caller is derived server-side from the JWT.
+        const page = await canPlanApi.listMySupportList({ limit: 50, nextToken });
         links.push(...page.items);
         nextToken = page.nextToken ?? undefined;
       } while (nextToken);

@@ -31,14 +31,41 @@ export type OnboardingStackParamList = {
 
 export type MainStackParamList = {
   Home: undefined;
+  /**
+   * Caregiver (SUPPORT_PERSON) landing screen: greeting + the list of primary
+   * users linked to this supporter. The initial Main-stack route when the
+   * signed-in profile's role is SUPPORT_PERSON (see App.tsx). Selecting a
+   * person drills into their (currently read-only) data.
+   */
+  CaregiverHome: undefined;
+  /**
+   * Caregiver drill-in for one supported person: an overview shell showing the
+   * data a supporter can currently read (progress reports). Task/category/
+   * calendar sections are shown as unavailable until the backend grants
+   * supporter-scoped reads of a primary user's live data.
+   */
+  PatientOverview: { userId: string; displayName: string };
   Settings: undefined;
-  Categories: undefined;
+  /**
+   * Own categories, or — with `ownerId` (caregiver delegated) — a linked primary
+   * user's categories with full management and a "Managing {managingName}" banner.
+   */
+  Categories: { ownerId?: string; managingName?: string } | undefined;
   /**
    * Without params: all of the owner's tasks. With `categoryId`: only tasks in
    * that category (the back button returns to Categories; `categoryName` titles
-   * the screen).
+   * the screen). With `ownerId` (caregiver delegated view): a linked primary
+   * user's tasks — read-only, with a "Managing {managingName}" banner and the
+   * add/manage write actions hidden.
    */
-  AllTasks: { categoryId?: string; categoryName?: string } | undefined;
+  AllTasks:
+    | {
+        categoryId?: string;
+        categoryName?: string;
+        ownerId?: string;
+        managingName?: string;
+      }
+    | undefined;
   ManageTasks: undefined;
   TaskView: { taskId: string };
   TaskDetail: { taskId: string };

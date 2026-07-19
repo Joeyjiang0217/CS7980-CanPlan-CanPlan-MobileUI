@@ -10,7 +10,6 @@ import { getCurrentUserId } from '../../../shared/api/authTokenProvider';
 import { canPlanApi } from '../../../shared/api/canplanApi';
 import type {
   CreateMyUserProfileInput,
-  CreateSupportLinkInput,
   PageInput,
   UpdateMyUserProfileInput,
   UserProfile,
@@ -62,12 +61,24 @@ export function listUsersByOrganization(organizationId: string, page?: PageInput
   return canPlanApi.listUsersByOrganization(organizationId, page);
 }
 
-export function listPrimaryUsersBySupporter(supporterId: string, page?: PageInput) {
-  return canPlanApi.listPrimaryUsersBySupporter(supporterId, page);
+/** Primary users the signed-in supporter currently has an effective link to. */
+export function listMySupportList(page?: PageInput) {
+  return canPlanApi.listMySupportList(page);
 }
 
-export function createSupportLink(input: CreateSupportLinkInput) {
-  return canPlanApi.createSupportLink(input);
+/** Members of the signed-in caller's organization (find primary users to link). */
+export function listMyOrganizationUsers(page?: PageInput) {
+  return canPlanApi.listMyOrganizationUsers(page);
+}
+
+/** Establish/restore the caller's link to a primary user in the same org. */
+export function selectPrimaryUser(primaryUserId: string) {
+  return canPlanApi.selectPrimaryUser(primaryUserId);
+}
+
+/** Soft-revoke the caller's link to a primary user. */
+export function unselectPrimaryUser(primaryUserId: string) {
+  return canPlanApi.unselectPrimaryUser(primaryUserId);
 }
 
 export function listAllUsers(page?: PageInput) {

@@ -5,7 +5,7 @@ const USER_PROFILE_FIELDS = /* GraphQL */ `
 `;
 
 const SUPPORT_LINK_FIELDS = /* GraphQL */ `
-  supporterId primaryUserId userId status permissions createdAt updatedAt
+  supporterId primaryUserId userId status createdAt updatedAt
 `;
 
 const CATEGORY_FIELDS = /* GraphQL */ `
@@ -53,18 +53,27 @@ export const LIST_USERS_BY_ORGANIZATION = /* GraphQL */ `
   }
 `;
 
-export const LIST_PRIMARY_USERS_BY_SUPPORTER = /* GraphQL */ `
-  query ListPrimaryUsersBySupporter($supporterId: ID!, $limit: Int, $nextToken: String) {
-    listPrimaryUsersBySupporter(supporterId: $supporterId, limit: $limit, nextToken: $nextToken) {
+export const LIST_MY_SUPPORT_LIST = /* GraphQL */ `
+  query ListMySupportList($limit: Int, $nextToken: String) {
+    listMySupportList(limit: $limit, nextToken: $nextToken) {
       items { ${SUPPORT_LINK_FIELDS} }
       nextToken
     }
   }
 `;
 
+export const LIST_MY_ORGANIZATION_USERS = /* GraphQL */ `
+  query ListMyOrganizationUsers($limit: Int, $nextToken: String) {
+    listMyOrganizationUsers(limit: $limit, nextToken: $nextToken) {
+      items { ${USER_PROFILE_FIELDS} }
+      nextToken
+    }
+  }
+`;
+
 export const LIST_MY_CATEGORIES = /* GraphQL */ `
-  query ListMyCategories($limit: Int, $nextToken: String) {
-    listMyCategories(limit: $limit, nextToken: $nextToken) {
+  query ListMyCategories($userId: ID, $limit: Int, $nextToken: String) {
+    listMyCategories(userId: $userId, limit: $limit, nextToken: $nextToken) {
       items { ${CATEGORY_FIELDS} }
       nextToken
     }
@@ -167,9 +176,15 @@ export const UPDATE_MY_USER_PROFILE = /* GraphQL */ `
   }
 `;
 
-export const CREATE_SUPPORT_LINK = /* GraphQL */ `
-  mutation CreateSupportLink($input: CreateSupportLinkInput!) {
-    createSupportLink(input: $input) { ${SUPPORT_LINK_FIELDS} }
+export const SELECT_PRIMARY_USER = /* GraphQL */ `
+  mutation SelectPrimaryUser($input: SelectPrimaryUserInput!) {
+    selectPrimaryUser(input: $input) { ${SUPPORT_LINK_FIELDS} }
+  }
+`;
+
+export const UNSELECT_PRIMARY_USER = /* GraphQL */ `
+  mutation UnselectPrimaryUser($input: UnselectPrimaryUserInput!) {
+    unselectPrimaryUser(input: $input) { ${SUPPORT_LINK_FIELDS} }
   }
 `;
 

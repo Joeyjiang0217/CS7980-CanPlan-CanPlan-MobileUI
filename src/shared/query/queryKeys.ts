@@ -14,13 +14,16 @@ export const queryKeys = {
     profile: (userId: string) => ['users', 'profile', userId] as const,
     organization: (organizationId: string, limit?: number) =>
       ['users', 'organization', organizationId, limit] as const,
-    primaryBySupporter: (supporterId: string, limit?: number) =>
-      ['users', 'primaryBySupporter', supporterId, limit] as const,
+    supportList: (limit?: number) => ['users', 'supportList', limit] as const,
+    organizationUsers: (limit?: number) =>
+      ['users', 'organizationUsers', limit] as const,
     all: (limit?: number) => ['users', 'all', limit] as const,
   },
   categories: {
     all: ['categories'] as const,
-    mine: (limit?: number) => ['categories', 'mine', limit] as const,
+    // `userId` scopes the cache to a delegated primary user; 'self' for the caller.
+    mine: (userId?: string, limit?: number) =>
+      ['categories', 'mine', userId ?? 'self', limit] as const,
   },
   tasks: {
     all: ['tasks'] as const,

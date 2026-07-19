@@ -10,8 +10,9 @@ import type {
 
 export { canPlanApi as categoriesApi };
 
-export function listMyCategories(page?: PageInput) {
-  return canPlanApi.listMyCategories(page);
+/** `userId` reads a delegated primary user's categories; omit for the caller's own. */
+export function listMyCategories(userId?: string, page?: PageInput) {
+  return canPlanApi.listMyCategories(userId, page);
 }
 
 export function createCategory(input: CreateCategoryInput) {

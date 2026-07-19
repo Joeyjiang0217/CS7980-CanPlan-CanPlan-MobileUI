@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -32,12 +32,18 @@ type CategoriesNavigation = NativeStackNavigationProp<MainStackParamList, 'Categ
 
 export default function CategoriesScreen() {
   const navigation = useNavigation<CategoriesNavigation>();
+  const route = useRoute<RouteProp<MainStackParamList, 'Categories'>>();
   const insets = useSafeAreaInsets();
 
-  const [ownerId, setOwnerId] = useState('');
+  // Caregiver delegated management of a linked primary user's categories.
+  const managedOwnerId = route.params?.ownerId;
+  const managingName = route.params?.managingName;
+  const managed = Boolean(managedOwnerId);
+
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [identityError, setIdentityError] = useState<string>();
 
-  const categoriesQuery = useMyCategories();
+  const categoriesQuery = useMyCategories(true, 50, managedOwnerId);
   const tasksQuery = useTasksByOwner(ownerId);
 
   const createMutation = useCreateCategory();
@@ -48,6 +54,11 @@ export default function CategoriesScreen() {
   const [editing, setEditing] = useState<Category | null>(null);
 
   useEffect(() => {
+    // Managed mode: the owner is the primary user from the route.
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
     void getCurrentUserId()
       .then((userId) => mounted && setOwnerId(userId))
@@ -60,7 +71,7 @@ export default function CategoriesScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   // Pull every task page so the per-category counts are complete.
   useEffect(() => {
@@ -111,7 +122,13 @@ export default function CategoriesScreen() {
   const handleSubmit = (values: CategoryFormValues) => {
     if (formMode === 'create') {
       createMutation.mutate(
-        { name: values.name, color: values.color, sortOrder: nextSortOrder },
+        {
+          name: values.name,
+          color: values.color,
+          sortOrder: nextSortOrder,
+          // Delegated: create under the managed primary user (undefined ⇒ self).
+          userId: managedOwnerId,
+        },
         { onSuccess: closeForm, onError: reportError },
       );
       return;
@@ -120,6 +137,7 @@ export default function CategoriesScreen() {
       updateMutation.mutate(
         {
           categoryId: editing.categoryId,
+          userId: managedOwnerId,
           color: values.color,
           // The default category's name can't be changed — only send it otherwise.
           ...(editing.isDefault ? {} : { name: values.name }),
@@ -133,7 +151,7 @@ export default function CategoriesScreen() {
     if (!editing || editing.isDefault) return;
     Alert.alert(
       'Delete category?',
-      `"${editing.name}" will be removed. Any tasks in it move to your default category.`,
+      `"${editing.name}" will be removed. Any tasks in it move to the default category.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -141,7 +159,7 @@ export default function CategoriesScreen() {
           style: 'destructive',
           onPress: () =>
             deleteMutation.mutate(
-              { categoryId: editing.categoryId },
+              { categoryId: editing.categoryId, userId: managedOwnerId },
               { onSuccess: closeForm, onError: reportError },
             ),
         },
@@ -161,6 +179,15 @@ export default function CategoriesScreen() {
           Categories
         </Text>
       </View>
+
+      {managed ? (
+        <View style={styles.banner}>
+          <Ionicons name="people" size={16} color={colors.primary} />
+          <Text style={styles.bannerText} numberOfLines={1}>
+            Managing {managingName ?? 'this person'}
+          </Text>
+        </View>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={[
@@ -203,6 +230,7 @@ export default function CategoriesScreen() {
                         navigation.navigate('AllTasks', {
                           categoryId: category.categoryId,
                           categoryName: category.name,
+                          ...(managed ? { ownerId: managedOwnerId, managingName } : {}),
                         })
                       }
                       style={styles.rowMain}
@@ -275,6 +303,22 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.bg,
+  },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.xl,
+    marginBottom: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceWarm,
+  },
+  bannerText: {
+    ...typography.bodyStrong,
+    color: colors.text,
+    flexShrink: 1,
   },
   header: {
     flexDirection: 'row',
