@@ -29,9 +29,7 @@ type ToggleKey =
   | 'allowChangingDate'
   | 'useCategories'
   | 'showOverdue'
-  | 'onlyToday'
-  | 'allowCompleteOnStart'
-  | 'autoAddCompleted';
+  | 'onlyToday';
 
 const TOGGLE_OPTIONS: Array<{ key: ToggleKey; label: string }> = [
   { key: 'simpleMode', label: "Enable 'Simple Mode'" },
@@ -39,8 +37,6 @@ const TOGGLE_OPTIONS: Array<{ key: ToggleKey; label: string }> = [
   { key: 'useCategories', label: 'Use Categories to Manage Tasks' },
   { key: 'showOverdue', label: 'Show Overdue Tasks on Launch' },
   { key: 'onlyToday', label: "Only Show Today's Tasks" },
-  { key: 'allowCompleteOnStart', label: 'Allow Completing Tasks on Start' },
-  { key: 'autoAddCompleted', label: 'Automatically Add Completed Tasks to Calendar' },
 ];
 
 export default function InterfaceSettingsScreen() {

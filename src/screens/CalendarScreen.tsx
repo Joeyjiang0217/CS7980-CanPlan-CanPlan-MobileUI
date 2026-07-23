@@ -11,6 +11,7 @@ import {
   InteractionManager,
   Modal,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -1315,6 +1316,20 @@ function DayAssignmentsPage({
   const resolvedAtOverrides = useOccurrenceResolvedAt();
   const instanceIdOverrides = useOccurrenceInstanceIds();
 
+  // Pull-to-refresh: refetch every active query behind the calendar view — this
+  // day's feed and instances plus the parent's day counts, task covers, and the
+  // past-week overdue feed — so a manual pull reloads the whole page at once.
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await queryClient.refetchQueries({ type: 'active' });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [queryClient]);
+
   // Explicit start flow: pressing a card's To Do / "Start now" control asks for
   // confirmation (starting forfeits delete — only skip remains), then
   // materializes the occurrence and opens it. The in-memory overrides bridge
@@ -1712,6 +1727,14 @@ function DayAssignmentsPage({
         maxToRenderPerBatch={stickyHeaderIndices.length > 0 ? rows.length : 4}
         windowSize={stickyHeaderIndices.length > 0 ? 31 : 5}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
       />
       <ConfirmDialog
         visible={startTarget !== null}
