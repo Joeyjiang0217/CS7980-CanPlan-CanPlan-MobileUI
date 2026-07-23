@@ -41,6 +41,7 @@ import {
 } from '../../features/media/hooks/useMedia';
 import { useTask } from '../../features/tasks/hooks/useTask';
 import { useMyCategories } from '../../features/categories/hooks/useCategories';
+import { useInterfaceSettings } from '../../features/settings/interfaceSettings';
 import type { MainStackParamList } from '../../navigation/types';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
 import type { Category, MediaAsset, MediaType } from '../../shared/api/canplanTypes';
@@ -234,6 +235,9 @@ export default function CreateTaskScreen() {
   const existingTaskId = route.params?.taskId;
   const fixedCategoryId = route.params?.fixedCategoryId;
   const fixedCategoryName = route.params?.fixedCategoryName;
+  // Interface setting: with categories disabled the picker is replaced by a
+  // hint; an existing categoryId is left untouched on save.
+  const { useCategories } = useInterfaceSettings();
   // From the Calendar "+" → "Start from scratch" flow: after creating the new
   // task, continue to scheduling it instead of returning to the task list.
   const scheduleAfterCreate = route.params?.scheduleAfterCreate ?? false;
@@ -1180,6 +1184,12 @@ export default function CreateTaskScreen() {
 
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>Category</Text>
+          {!useCategories ? (
+            <Text style={styles.stepHint}>
+              You must enable categories to select a category.
+            </Text>
+          ) : (
+          <>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={categoryLocked ? 'Category (fixed)' : 'Choose a category'}
@@ -1209,6 +1219,8 @@ export default function CreateTaskScreen() {
               This task will be added to “{selectedCategory?.name || fixedCategoryName}”.
             </Text>
           ) : null}
+          </>
+          )}
         </View>
       </ScrollView>
 

@@ -18,6 +18,7 @@ import DraggableFlatList, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useMyCategories } from '../../features/categories/hooks/useCategories';
+import { useInterfaceSettings } from '../../features/settings/interfaceSettings';
 import {
   useDeleteTask,
   useTasksByOwner,
@@ -64,6 +65,8 @@ function orderTasksByIds(tasks: Task[], orderedIds: string[]) {
 export default function ManageTasksScreen() {
   const navigation = useNavigation<ManageTasksNavigation>();
   const insets = useSafeAreaInsets();
+  // Interface setting: with categories disabled the "Add to" action is hidden.
+  const { useCategories } = useInterfaceSettings();
   const [ownerId, setOwnerId] = useState('');
   const [identityError, setIdentityError] = useState<string>();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -324,12 +327,14 @@ export default function ManageTasksScreen() {
           disabled={actionsDisabled}
           onPress={() => setConfirmDelete(true)}
         />
-        <BottomAction
-          icon="folder-open-outline"
-          label="Add to"
-          disabled={actionsDisabled}
-          onPress={() => setCategorySheetVisible(true)}
-        />
+        {useCategories ? (
+          <BottomAction
+            icon="folder-open-outline"
+            label="Add to"
+            disabled={actionsDisabled}
+            onPress={() => setCategorySheetVisible(true)}
+          />
+        ) : null}
       </View>
 
       <ConfirmDialog

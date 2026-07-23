@@ -430,23 +430,34 @@ function StepCard({
           />
         </Pressable>
         {isInstance && showCompletionControl ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={completed ? 'Mark step not done' : 'Mark step done'}
-            accessibilityState={{ selected: completed }}
-            onPress={onToggleComplete}
-            style={({ pressed }) => [
-              styles.checkButton,
-              completed ? styles.checkButtonDone : null,
-              pressed ? styles.pressed : null,
-            ]}
-          >
-            <Ionicons
-              name={completed ? 'arrow-undo' : 'checkmark'}
-              size={18}
-              color={completed ? colors.danger : TEAL}
-            />
-          </Pressable>
+          completed ? (
+            // Undo stays on the list. Undoing only clears the done state — it
+            // does not time the step; timing lives in the detail player.
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Mark step not done"
+              accessibilityState={{ selected: true }}
+              onPress={onToggleComplete}
+              style={({ pressed }) => [
+                styles.checkButton,
+                styles.checkButtonDone,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons name="arrow-undo" size={18} color={colors.danger} />
+            </Pressable>
+          ) : (
+            // No check on the list: completing a step must go through the detail
+            // player so its timer runs. This arrow (and the title row) opens it.
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Open step ${index + 1} to complete it`}
+              onPress={onOpenDetail}
+              style={({ pressed }) => [styles.openButton, pressed ? styles.pressed : null]}
+            >
+              <Ionicons name="chevron-forward" size={22} color={colors.textMuted} />
+            </Pressable>
+          )
         ) : null}
       </View>
     </View>
@@ -1590,6 +1601,12 @@ const styles = StyleSheet.create({
   },
   checkButtonDone: {
     backgroundColor: '#FDE7E7',
+  },
+  openButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   stepNumberText: {
     ...typography.bodyStrong,

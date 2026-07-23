@@ -29,9 +29,7 @@ type ToggleKey =
   | 'allowChangingDate'
   | 'useCategories'
   | 'showOverdue'
-  | 'onlyToday'
-  | 'allowCompleteOnStart'
-  | 'autoAddCompleted';
+  | 'onlyToday';
 
 const TOGGLE_OPTIONS: Array<{ key: ToggleKey; label: string }> = [
   { key: 'simpleMode', label: "Enable 'Simple Mode'" },
@@ -39,8 +37,6 @@ const TOGGLE_OPTIONS: Array<{ key: ToggleKey; label: string }> = [
   { key: 'useCategories', label: 'Use Categories to Manage Tasks' },
   { key: 'showOverdue', label: 'Show Overdue Tasks on Launch' },
   { key: 'onlyToday', label: "Only Show Today's Tasks" },
-  { key: 'allowCompleteOnStart', label: 'Allow Completing Tasks on Start' },
-  { key: 'autoAddCompleted', label: 'Automatically Add Completed Tasks to Calendar' },
 ];
 
 export default function InterfaceSettingsScreen() {
@@ -51,6 +47,21 @@ export default function InterfaceSettingsScreen() {
   // screen and app restarts. Wiring these values into app behavior is the
   // next pass.
   const settings = useInterfaceSettings();
+
+  // Categories can't be a starting page while categories are disabled.
+  const startingPageOptions = settings.useCategories
+    ? STARTING_PAGE_OPTIONS
+    : STARTING_PAGE_OPTIONS.filter((option) => option.value !== 'CATEGORIES');
+
+  const setToggleValue = (key: ToggleKey, next: boolean) => {
+    // Turning categories off while Categories is the chosen starting page
+    // would leave a hidden ("ghost") selection — fall back to the default.
+    if (key === 'useCategories' && !next && settings.startingPage === 'CATEGORIES') {
+      updateInterfaceSettings({ useCategories: false, startingPage: 'CALENDAR' });
+      return;
+    }
+    updateInterfaceSettings({ [key]: next });
+  };
 
   return (
     <View style={styles.root}>
@@ -76,7 +87,7 @@ export default function InterfaceSettingsScreen() {
             </Text>
 
             <View style={styles.card}>
-              {STARTING_PAGE_OPTIONS.map((option, index) => {
+              {startingPageOptions.map((option, index) => {
                 const isSelected = settings.startingPage === option.value;
                 return (
                   <Fragment key={option.value}>
@@ -115,7 +126,7 @@ export default function InterfaceSettingsScreen() {
                 <Switch
                   accessibilityLabel={option.label}
                   value={settings[option.key]}
-                  onValueChange={(next) => updateInterfaceSettings({ [option.key]: next })}
+                  onValueChange={(next) => setToggleValue(option.key, next)}
                   trackColor={{ false: colors.disabled, true: colors.primary }}
                   thumbColor={colors.onPrimary}
                   ios_backgroundColor={colors.disabled}

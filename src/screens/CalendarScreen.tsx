@@ -11,6 +11,7 @@ import {
   InteractionManager,
   Modal,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -47,11 +48,16 @@ import {
 } from '../features/assignments/occurrenceCompletion';
 import { describeRepeat } from '../features/assignments/repeat';
 import {
+  getInterfaceSettings,
+  useInterfaceSettings,
+} from '../features/settings/interfaceSettings';
+import {
   useCoverPreviewUriMap,
   useCoverThumbnailUriMap,
 } from '../features/media/hooks/useCoverThumbnails';
 import { useMediaDownloadUrl, useMediaDownloadUrlMap } from '../features/media/hooks/useMedia';
 import { useTasksByOwner, useTaskSteps } from '../features/tasks/hooks/useTaskApi';
+import { useSettingsTapGate } from '../shared/hooks/useSettingsTapGate';
 import type { MainStackParamList } from '../navigation/types';
 import { getCurrentUserId } from '../shared/api/authTokenProvider';
 import type {
@@ -68,6 +74,48 @@ import { colors, radius, shadow, spacing, typography } from '../shared/theme/tok
 type CalendarNavigation = NativeStackNavigationProp<MainStackParamList, 'Calendar'>;
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** How far back the Show Overdue on Launch list reaches (today-7 … yesterday). */
+const PAST_OVERDUE_DAYS = 7;
+
+/**
+ * Which status tab the calendar opens on. Consumed once per JS process (a
+ * true cold start): Show Overdue on Launch lands on the Overdue tab only in
+ * the locked Simple Mode calendar, and Only Show Today's Tasks suppresses it
+ * entirely. Later mounts (Settings round-trips, stack rebuilds) keep To Do.
+ */
+let launchTabDecided = false;
+function initialCalendarTab(): StatusKey {
+  if (launchTabDecided) {
+    return 'todo';
+  }
+  launchTabDecided = true;
+  const settings = getInterfaceSettings();
+  return settings.simpleMode &&
+    settings.startingPage === 'CALENDAR' &&
+    !settings.allowChangingDate &&
+    settings.showOverdue &&
+    !settings.onlyToday
+    ? 'overdue'
+    : 'todo';
+}
+
+const NO_PAST_OVERDUE: TaskInstanceView[] = [];
+
+/** "2026-07-13" → "Sunday" (past-week group labels; unique within 7 days). */
+const weekdayName = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
+};
+
+/** "2026-07-13" → "Jul 13" (the date suffix on group labels). */
+const monthDay = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+};
 
 type StatusKey = 'overdue' | 'todo' | 'done' | 'skipped';
 
@@ -1235,6 +1283,7 @@ function DayAssignmentsPage({
   height,
   ownerId,
   activeStatus,
+  pastOverdueViews,
   coverByTask,
   coverThumbnailUriByTask,
   coverPreviewUriByTask,
@@ -1249,6 +1298,8 @@ function DayAssignmentsPage({
   height: number;
   ownerId: string;
   activeStatus: StatusKey;
+  /** Past week's unresolved occurrences (today's page, Show Overdue mode only). */
+  pastOverdueViews: readonly TaskInstanceView[];
   coverByTask: Map<string, string | null | undefined>;
   coverThumbnailUriByTask: ReadonlyMap<string, string | null>;
   coverPreviewUriByTask: ReadonlyMap<string, string | null>;
@@ -1264,6 +1315,20 @@ function DayAssignmentsPage({
   const statusOverrides = useOccurrenceStatuses();
   const resolvedAtOverrides = useOccurrenceResolvedAt();
   const instanceIdOverrides = useOccurrenceInstanceIds();
+
+  // Pull-to-refresh: refetch every active query behind the calendar view — this
+  // day's feed and instances plus the parent's day counts, task covers, and the
+  // past-week overdue feed — so a manual pull reloads the whole page at once.
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await queryClient.refetchQueries({ type: 'active' });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [queryClient]);
 
   // Explicit start flow: pressing a card's To Do / "Start now" control asks for
   // confirmation (starting forfeits delete — only skip remains), then
@@ -1415,14 +1480,86 @@ function DayAssignmentsPage({
     | { kind: 'loading'; key: string }
     | { kind: 'message'; key: string; message: string }
     | { kind: 'header'; key: string; hour: number }
+    | {
+        kind: 'dayheader';
+        key: string;
+        dayISO: string;
+        label: string;
+        /** "started/total" for the group, QQ-roster style. */
+        count: string;
+        expanded: boolean;
+      }
     | { kind: 'task'; key: string; view: TaskInstanceView };
 
+  // Collapsible past-day groups: an explicit tap wins; otherwise only the
+  // default group is open. Session-only by design (resets on relaunch).
+  const [groupToggles, setGroupToggles] = useState<ReadonlyMap<string, boolean>>(
+    new Map(),
+  );
+  const toggleGroup = useCallback((dayISO: string, expanded: boolean) => {
+    setGroupToggles((current) => {
+      const next = new Map(current);
+      next.set(dayISO, !expanded);
+      return next;
+    });
+  }, []);
+
   const rows = useMemo<DayRow[]>(() => {
+    // Show Overdue mode appends the past week's unresolved occurrences as
+    // collapsible per-day groups, most recent day first (today's own
+    // hour-slot groups stay on top, ungrouped).
+    const pastRows: DayRow[] = [];
+    if (activeStatus === 'overdue' && pastOverdueViews.length > 0) {
+      const byDate = new Map<string, TaskInstanceView[]>();
+      for (const view of pastOverdueViews) {
+        const list = byDate.get(view.scheduledDate);
+        if (list) {
+          list.push(view);
+        } else {
+          byDate.set(view.scheduledDate, [view]);
+        }
+      }
+      const sortedDays = [...byDate.keys()].sort().reverse();
+      // Today's overdue already sits expanded above, so a default-open group
+      // is only offered when today has none: the newest non-empty past day.
+      const defaultExpandedDay = views.length > 0 ? null : sortedDays[0] ?? null;
+      const yesterdayISO = toISODate(addDays(today, -1));
+      for (const dayISO of sortedDays) {
+        const dayViews = byDate.get(dayISO)!;
+        dayViews.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
+        const startedCount = dayViews.filter(
+          (view) =>
+            !view.isVirtual ||
+            instanceIdOverrides.has(
+              occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
+            ),
+        ).length;
+        const expanded = groupToggles.get(dayISO) ?? dayISO === defaultExpandedDay;
+        pastRows.push({
+          kind: 'dayheader',
+          key: `day-${dayISO}`,
+          dayISO,
+          label: `${dayISO === yesterdayISO ? 'Yesterday' : weekdayName(dayISO)} · ${monthDay(dayISO)}`,
+          count: `${startedCount}/${dayViews.length}`,
+          expanded,
+        });
+        if (expanded) {
+          for (const view of dayViews) {
+            pastRows.push({
+              kind: 'task',
+              key: `${view.assignmentId}-${view.scheduledFor}`,
+              view,
+            });
+          }
+        }
+      }
+    }
+
     if (isLoading) return [{ kind: 'loading', key: 'loading' }];
     if (viewsQuery.isError) {
       return [{ kind: 'message', key: 'error', message: 'Could not load this day’s tasks.' }];
     }
-    if (views.length === 0) {
+    if (views.length === 0 && pastRows.length === 0) {
       return [{ kind: 'message', key: 'empty', message: 'Nothing here for this day.' }];
     }
 
@@ -1437,8 +1574,31 @@ function DayAssignmentsPage({
         });
       }
     }
+    nextRows.push(...pastRows);
     return nextRows;
-  }, [groups, isLoading, views.length, viewsQuery.isError]);
+  }, [
+    groups,
+    isLoading,
+    views.length,
+    viewsQuery.isError,
+    activeStatus,
+    pastOverdueViews,
+    today,
+    groupToggles,
+    instanceIdOverrides,
+  ]);
+
+  // Pin hour-slot and day-group headers while their section scrolls
+  // (QQ-roster style; an incoming header pushes the stuck one out).
+  const stickyHeaderIndices = useMemo(() => {
+    const indices: number[] = [];
+    rows.forEach((row, index) => {
+      if (row.kind === 'header' || row.kind === 'dayheader') {
+        indices.push(index);
+      }
+    });
+    return indices;
+  }, [rows]);
 
   const renderRow = useCallback(
     ({ item }: { item: DayRow }) => {
@@ -1449,7 +1609,34 @@ function DayAssignmentsPage({
         return <Text style={styles.stateText}>{item.message}</Text>;
       }
       if (item.kind === 'header') {
-        return <Text style={styles.slotHeader}>{slotLabel(item.hour)}</Text>;
+        // Opaque wrapper so cards scroll cleanly underneath while stuck.
+        return (
+          <View style={styles.slotHeaderRow}>
+            <Text style={styles.slotHeader}>{slotLabel(item.hour)}</Text>
+          </View>
+        );
+      }
+      if (item.kind === 'dayheader') {
+        return (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: item.expanded }}
+            accessibilityLabel={`${item.label}, ${item.count} tasks`}
+            onPress={() => toggleGroup(item.dayISO, item.expanded)}
+            style={({ pressed }) => [
+              styles.dayGroupHeader,
+              pressed ? styles.dayGroupHeaderPressed : null,
+            ]}
+          >
+            <Ionicons
+              name={item.expanded ? 'chevron-down' : 'chevron-forward'}
+              size={18}
+              color={colors.textMuted}
+            />
+            <Text style={styles.dayGroupLabel}>{item.label}</Text>
+            <Text style={styles.dayGroupCount}>{item.count}</Text>
+          </Pressable>
+        );
       }
 
       const view = item.view;
@@ -1519,6 +1706,7 @@ function DayAssignmentsPage({
       statusOverrides,
       todayISO,
       minuteTick,
+      toggleGroup,
     ],
   );
 
@@ -1530,10 +1718,23 @@ function DayAssignmentsPage({
         data={rows}
         keyExtractor={(item) => item.key}
         renderItem={renderRow}
-        initialNumToRender={6}
-        maxToRenderPerBatch={4}
-        windowSize={5}
+        stickyHeaderIndices={stickyHeaderIndices.length > 0 ? stickyHeaderIndices : undefined}
+        // Sticky group headers break under cell recycling (rows blank out
+        // near the end and scroll-up jumps back to the group top), so with
+        // groups present every row stays mounted — collapsed groups keep the
+        // row count small. The plain ungrouped day keeps the lean window.
+        initialNumToRender={stickyHeaderIndices.length > 0 ? rows.length : 6}
+        maxToRenderPerBatch={stickyHeaderIndices.length > 0 ? rows.length : 4}
+        windowSize={stickyHeaderIndices.length > 0 ? 31 : 5}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
       />
       <ConfirmDialog
         visible={startTarget !== null}
@@ -1572,7 +1773,7 @@ export default function CalendarScreen() {
   const [ownerId, setOwnerId] = useState('');
   const [selected, setSelected] = useState(() => new Date());
   const [visualSelected, setVisualSelected] = useState(() => new Date());
-  const [activeStatus, setActiveStatus] = useState<StatusKey>('todo');
+  const [activeStatus, setActiveStatus] = useState<StatusKey>(initialCalendarTab);
   const [monthPickerVisible, setMonthPickerVisible] = useState(false);
   const [addChoiceVisible, setAddChoiceVisible] = useState(false);
   const [pagerHeight, setPagerHeight] = useState(0);
@@ -1591,6 +1792,23 @@ export default function CalendarScreen() {
 
   const today = useToday();
   const selectedISO = toISODate(selected);
+  const { allowChangingDate, simpleMode, startingPage, showOverdue, onlyToday } =
+    useInterfaceSettings();
+
+  // Show Overdue on Launch data scope: the locked Simple Mode calendar's
+  // Overdue tab also carries the past week's unresolved occurrences. Only
+  // Show Today's Tasks fully suppresses this.
+  const includePastOverdue =
+    simpleMode &&
+    startingPage === 'CALENDAR' &&
+    !allowChangingDate &&
+    showOverdue &&
+    !onlyToday;
+
+  // Simple Mode: no back, no add — only a settings gear guarded by the same
+  // 3-tap sequence as the simple All Tasks screen (accidental-tap protection).
+  const openSettings = useCallback(() => navigation.navigate('Settings'), [navigation]);
+  const { handleSettingsTap, settingsHint } = useSettingsTapGate(openSettings);
 
   const dayViewsQuery = useTaskInstanceViews(ownerId, selectedISO, selectedISO);
   const tasksQuery = useTasksByOwner(ownerId);
@@ -1645,6 +1863,26 @@ export default function CalendarScreen() {
   // minuteTick keeps the bucket split (and the footer counts) flipping to do →
   // overdue live as scheduled moments pass.
   const minuteTick = useMinuteTick();
+
+  // The past week's feed, fetched only in Show Overdue mode (empty ownerId
+  // disables the query otherwise).
+  const pastOverdueQuery = useTaskInstanceViews(
+    includePastOverdue ? ownerId : '',
+    toISODate(addDays(today, -PAST_OVERDUE_DAYS)),
+    toISODate(addDays(today, -1)),
+  );
+  const pastOverdueViews = useMemo(() => {
+    if (!includePastOverdue) {
+      return NO_PAST_OVERDUE;
+    }
+    return (pastOverdueQuery.data?.items ?? []).filter((view) => {
+      const override = statusOverrides.get(
+        occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
+      );
+      return liveStatus(view, override ?? view.status) === 'OVERDUE';
+    });
+  }, [includePastOverdue, pastOverdueQuery.data, statusOverrides, minuteTick]);
+
   const buckets = useMemo(() => {
     const result: Record<StatusKey, TaskInstanceView[]> = {
       overdue: [],
@@ -1661,8 +1899,10 @@ export default function CalendarScreen() {
         result[key].push(view);
       }
     }
+    // Footer count stays in step with the Overdue tab's list content.
+    result.overdue.push(...pastOverdueViews);
     return result;
-  }, [dayViewsQuery.data, statusOverrides, minuteTick]);
+  }, [dayViewsQuery.data, statusOverrides, minuteTick, pastOverdueViews]);
 
   // Horizontal pager: keep three weeks of lightweight positions, but render
   // real task pages only for dates the user has actually opened.
@@ -1799,6 +2039,15 @@ export default function CalendarScreen() {
     [],
   );
 
+  // "Allow Changing Date in Calendar" off → the calendar is pinned to today:
+  // week strip and month picker are hidden, the day pager can't swipe, and
+  // this effect snaps back to today (also following it across midnight).
+  useEffect(() => {
+    if (!allowChangingDate && !isSameDay(visualSelected, today)) {
+      handleSelectDate(today);
+    }
+  }, [allowChangingDate, visualSelected, today, handleSelectDate]);
+
   const openOccurrence = useCallback(
     (view: TaskInstanceView) => {
       // The views feed can lag a just-made start or status change (the chip
@@ -1845,29 +2094,72 @@ export default function CalendarScreen() {
     <View style={styles.root}>
       <View style={[styles.topArea, { paddingTop: insets.top + spacing.sm }]}>
         <View style={styles.header}>
-          <BackButton onPress={() => navigation.goBack()} variant="dark" />
-          <Text accessibilityRole="header" style={styles.headerTitle}>
-            Calendar
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open month calendar"
-            onPress={() => setMonthPickerVisible(true)}
-            style={({ pressed }) => [styles.eyeButton, pressed ? styles.chipPressed : null]}
-            hitSlop={6}
-          >
-            <Ionicons name="eye-outline" size={24} color={colors.text} />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Add a task"
-            onPress={() => setAddChoiceVisible(true)}
-            style={({ pressed }) => [styles.addButton, pressed ? styles.addButtonPressed : null]}
-          >
-            <Ionicons name="add" size={30} color={colors.onPrimary} />
-          </Pressable>
+          {!simpleMode ? (
+            <BackButton onPress={() => navigation.goBack()} variant="dark" />
+          ) : (
+            // Invisible mirror of the right-side buttons (44pt each + row gap)
+            // so the centered title sits on the true screen centerline.
+            <View style={{ width: allowChangingDate ? 88 + spacing.sm : 44 }} />
+          )}
+          {simpleMode && settingsHint ? (
+            <Text
+              accessibilityRole="header"
+              numberOfLines={1}
+              style={styles.headerSettingsHint}
+            >
+              {settingsHint}
+            </Text>
+          ) : (
+            <Text
+              accessibilityRole="header"
+              numberOfLines={1}
+              style={[styles.headerTitle, simpleMode ? styles.headerTitleCentered : null]}
+            >
+              Calendar
+            </Text>
+          )}
+          {allowChangingDate ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open month calendar"
+              onPress={() => setMonthPickerVisible(true)}
+              style={({ pressed }) => [styles.eyeButton, pressed ? styles.chipPressed : null]}
+              hitSlop={6}
+            >
+              <Ionicons name="eye-outline" size={24} color={colors.text} />
+            </Pressable>
+          ) : null}
+          {simpleMode ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
+              onPress={handleSettingsTap}
+              style={({ pressed }) => [styles.eyeButton, pressed ? styles.chipPressed : null]}
+              hitSlop={6}
+            >
+              <Ionicons name="settings-outline" size={22} color={colors.text} />
+            </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add a task"
+              onPress={() => setAddChoiceVisible(true)}
+              style={({ pressed }) => [styles.addButton, pressed ? styles.addButtonPressed : null]}
+            >
+              <Ionicons name="add" size={30} color={colors.onPrimary} />
+            </Pressable>
+          )}
         </View>
 
+        {!allowChangingDate ? (
+          <Text
+            accessibilityRole="header"
+            accessibilityLabel={`Today, ${formatShortDate(toISODate(today))}`}
+            style={styles.lockedTodayLabel}
+          >
+            {formatShortDate(toISODate(today))}
+          </Text>
+        ) : (
         <View style={styles.weekStrip}>
           {weekDays.map((day) => {
             const isSelected = isSameDay(day, visualSelected);
@@ -1910,6 +2202,7 @@ export default function CalendarScreen() {
             );
           })}
         </View>
+        )}
       </View>
 
       <View
@@ -1922,6 +2215,8 @@ export default function CalendarScreen() {
             data={pages}
             horizontal
             pagingEnabled
+            // Locked to today: swiping between days is date changing too.
+            scrollEnabled={allowChangingDate}
             showsHorizontalScrollIndicator={false}
             keyExtractor={(date) => toISODate(date)}
             initialScrollIndex={initialDayPagerIndex}
@@ -1950,6 +2245,9 @@ export default function CalendarScreen() {
                   height={pagerHeight}
                   ownerId={ownerId}
                   activeStatus={activeStatus}
+                  pastOverdueViews={
+                    isSameDay(item, today) ? pastOverdueViews : NO_PAST_OVERDUE
+                  }
                   coverByTask={coverByTask}
                   coverThumbnailUriByTask={coverThumbnailUriByTask}
                   coverPreviewUriByTask={coverPreviewUriByTask}
@@ -2072,6 +2370,17 @@ const styles = StyleSheet.create({
     ...typography.title,
     color: colors.text,
   },
+  headerTitleCentered: {
+    textAlign: 'center',
+  },
+  // 3-tap settings hint — same look as the simple All Tasks header prompt.
+  headerSettingsHint: {
+    flex: 1,
+    marginLeft: spacing.sm,
+    ...typography.heading,
+    color: colors.text,
+    textAlign: 'center',
+  },
   eyeButton: {
     width: 44,
     height: 44,
@@ -2097,6 +2406,13 @@ const styles = StyleSheet.create({
   },
   weekStrip: {
     flexDirection: 'row',
+    marginTop: spacing.lg,
+  },
+  // Replaces the week strip when date changing is disabled: just today's date.
+  lockedTodayLabel: {
+    ...typography.heading,
+    color: colors.text,
+    textAlign: 'center',
     marginTop: spacing.lg,
   },
   weekCell: {
@@ -2215,6 +2531,31 @@ const styles = StyleSheet.create({
   slotHeader: {
     ...typography.heading,
     color: colors.text,
+  },
+  slotHeaderRow: {
+    backgroundColor: colors.bg,
+    paddingVertical: spacing.xs,
+  },
+  // Collapsible past-day group header. Opaque background so cards scroll
+  // cleanly underneath while it's stuck to the top.
+  dayGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.bg,
+    paddingVertical: spacing.sm,
+  },
+  dayGroupHeaderPressed: {
+    opacity: 0.6,
+  },
+  dayGroupLabel: {
+    flex: 1,
+    ...typography.heading,
+    color: colors.text,
+  },
+  dayGroupCount: {
+    ...typography.body,
+    color: colors.textMuted,
   },
   taskCard: {
     backgroundColor: colors.surface,

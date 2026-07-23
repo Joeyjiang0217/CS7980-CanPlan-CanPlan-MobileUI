@@ -24,8 +24,6 @@ export interface InterfaceSettings {
   useCategories: boolean;
   showOverdue: boolean;
   onlyToday: boolean;
-  allowCompleteOnStart: boolean;
-  autoAddCompleted: boolean;
   /** Task icon size slider, 0–100. */
   iconSizePercent: number;
 }
@@ -37,8 +35,6 @@ export const INTERFACE_SETTINGS_DEFAULTS: InterfaceSettings = {
   useCategories: true,
   showOverdue: false,
   onlyToday: false,
-  allowCompleteOnStart: true,
-  autoAddCompleted: true,
   iconSizePercent: 50,
 };
 
@@ -76,8 +72,6 @@ function sanitize(stored: unknown): InterfaceSettings {
     'useCategories',
     'showOverdue',
     'onlyToday',
-    'allowCompleteOnStart',
-    'autoAddCompleted',
   ] as const) {
     if (typeof raw[key] === 'boolean') {
       result[key] = raw[key];
@@ -88,6 +82,11 @@ function sanitize(stored: unknown): InterfaceSettings {
     Number.isFinite(raw.iconSizePercent)
   ) {
     result.iconSizePercent = Math.min(100, Math.max(0, raw.iconSizePercent));
+  }
+  // Coherence: Categories can't be the starting page while categories are
+  // disabled (the settings screen enforces this too; this guards old blobs).
+  if (!result.useCategories && result.startingPage === 'CATEGORIES') {
+    result.startingPage = INTERFACE_SETTINGS_DEFAULTS.startingPage;
   }
   return result;
 }
