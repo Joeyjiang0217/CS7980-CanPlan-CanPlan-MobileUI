@@ -65,6 +65,8 @@ export interface Task {
   ownerId: string;
   title: string;
   categoryId: string;
+  /** Per-owner display order (backend-assigned; gaps allowed). */
+  order?: number | null;
   description?: string | null;
   scheduleRule?: string | null;
   schedule?: TaskSchedule | null;
@@ -417,6 +419,31 @@ export interface GenerateReportInput {
   /** YYYY-MM-DD, inclusive; the backend caps the span at 366 days. */
   from: string;
   to: string;
+}
+
+/**
+ * Output of `generateReport` — an UNSAVED draft. `scope`/`dateRange`/`stats`
+ * are AWSJSON and are kept as the raw strings the server returned so they can
+ * be resubmitted to `saveReport` unchanged (the `draftToken` binds this exact
+ * content, so we must not re-serialize it).
+ */
+export interface GeneratedReport {
+  draftToken: string;
+  scope: string;
+  dateRange: string;
+  generatedAt: string;
+  narrative: string;
+  stats: string;
+}
+
+/** Persist a previously generated report. Echo the draft's fields verbatim. */
+export interface SaveReportInput {
+  draftToken: string;
+  scope: string;
+  dateRange: string;
+  generatedAt: string;
+  narrative: string;
+  stats: string;
 }
 
 /** Deterministic statistics computed by the backend over a date range. */

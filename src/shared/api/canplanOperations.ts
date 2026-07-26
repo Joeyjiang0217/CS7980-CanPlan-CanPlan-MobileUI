@@ -21,9 +21,7 @@ const TASK_STEP_FIELDS = /* GraphQL */ `
 `;
 
 const TASK_FIELDS = /* GraphQL */ `
-  taskId ownerId title categoryId description scheduleRule
-  schedule { repeatEvery repeatUnit firstOccurrenceAt timezone enabled }
-  nextOccurrenceAt notificationEnabled coverImageAssetId createdAt updatedAt
+  taskId ownerId title categoryId order description coverImageAssetId createdAt updatedAt
 `;
 
 const ASSIGNMENT_FIELDS = /* GraphQL */ `
@@ -339,6 +337,14 @@ export const GET_REPORT_DOWNLOAD_URL = /* GraphQL */ `
 
 export const GENERATE_REPORT = /* GraphQL */ `
   mutation GenerateReport($input: GenerateReportInput!) {
-    generateReport(input: $input) { ${REPORT_FIELDS} }
+    generateReport(input: $input) {
+      draftToken scope dateRange generatedAt narrative stats
+    }
+  }
+`;
+
+export const SAVE_REPORT = /* GraphQL */ `
+  mutation SaveReport($input: SaveReportInput!) {
+    saveReport(input: $input) { ${REPORT_FIELDS} }
   }
 `;

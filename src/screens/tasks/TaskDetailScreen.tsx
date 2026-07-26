@@ -24,7 +24,13 @@ export default function TaskDetailScreen() {
   const { taskId } = route.params;
 
   const taskQuery = useTask(taskId);
-  const categoriesQuery = useMyCategories(Boolean(taskQuery.data?.ownerId));
+  // Resolve the chip against the task OWNER's categories — for a caregiver
+  // viewing a linked user's task, that's the primary user's list (delegated).
+  const categoriesQuery = useMyCategories(
+    Boolean(taskQuery.data?.ownerId),
+    50,
+    taskQuery.data?.ownerId,
+  );
   const deleteTaskMutation = useDeleteTask();
 
   const [confirmDelete, setConfirmDelete] = useState(false);

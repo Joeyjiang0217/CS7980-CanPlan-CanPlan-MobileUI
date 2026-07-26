@@ -54,9 +54,9 @@ export type MainStackParamList = {
   /**
    * Without params: all of the owner's tasks. With `categoryId`: only tasks in
    * that category (the back button returns to Categories; `categoryName` titles
-   * the screen). With `ownerId` (caregiver delegated view): a linked primary
-   * user's tasks — read-only, with a "Managing {managingName}" banner and the
-   * add/manage write actions hidden.
+   * the screen). With `ownerId` (caregiver delegated): a linked primary user's
+   * tasks, with a "Managing {managingName}" banner; adding a task is allowed
+   * (created under that user), reorder/Manage is hidden.
    */
   AllTasks:
     | {
@@ -72,10 +72,18 @@ export type MainStackParamList = {
   /**
    * `fixedCategoryId` pins the new task to one category and hides the category
    * picker (used when creating from a category view); `fixedCategoryName` titles
-   * the list we return to after saving.
+   * the list we return to after saving. `ownerId` (caregiver delegated) creates
+   * the new task under a linked primary user (editing an existing task derives
+   * the owner from the task itself, so no param is needed then).
    */
   CreateTask:
-    | { taskId?: string; fixedCategoryId?: string; fixedCategoryName?: string }
+    | {
+        taskId?: string;
+        fixedCategoryId?: string;
+        fixedCategoryName?: string;
+        ownerId?: string;
+        managingName?: string;
+      }
     | undefined;
   CreateTaskStep: { taskId: string; stepId?: string };
   ReorderSteps: { taskId: string };

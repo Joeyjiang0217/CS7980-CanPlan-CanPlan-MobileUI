@@ -116,7 +116,7 @@ export default function PatientOverviewScreen() {
           <SectionCard
             icon="list-outline"
             title="Tasks"
-            subtitle="View this person's tasks"
+            subtitle="View, add, and edit this person's tasks"
             onPress={() =>
               navigation.navigate('AllTasks', { ownerId: userId, managingName: displayName })
             }

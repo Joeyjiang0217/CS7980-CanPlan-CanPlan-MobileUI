@@ -361,6 +361,9 @@ export default function CreateTaskScreen() {
   const existingTaskId = route.params?.taskId;
   const fixedCategoryId = route.params?.fixedCategoryId;
   const fixedCategoryName = route.params?.fixedCategoryName;
+  // Caregiver delegated: create the new task under this primary user. (Editing
+  // an existing task derives the owner from the loaded task, below.)
+  const managedOwnerId = route.params?.ownerId;
   const createTaskMutation = useCreateTask();
   const deleteTaskMutation = useDeleteTask();
   const updateTaskMutation = useUpdateTask();
@@ -411,7 +414,13 @@ export default function CreateTaskScreen() {
   const [inlineError, setInlineError] = useState<string>();
   const [aiStepsNotice, setAiStepsNotice] = useState(false);
   const [hydratedTaskId, setHydratedTaskId] = useState<string>();
-  const categoriesQuery = useMyCategories(Boolean(categoryOwnerId));
+  const categoriesQuery = useMyCategories(
+    Boolean(categoryOwnerId),
+    50,
+    // Delegated owner: the managed primary user (new task) or the loaded task's
+    // owner (edit). Undefined ⇒ the caller's own categories.
+    managedOwnerId ?? existingTaskQuery.data?.ownerId,
+  );
   const taskOperationRef = useRef<string | undefined>(undefined);
   const draftCreationPromiseRef = useRef<Promise<string> | undefined>(undefined);
 
@@ -508,6 +517,12 @@ export default function CreateTaskScreen() {
   }, [coverImage, existingCoverQuery.data?.downloadUrl]);
 
   useEffect(() => {
+    // Delegated (caregiver) new task: the category owner is the managed user.
+    if (managedOwnerId) {
+      setCategoryOwnerId(managedOwnerId);
+      return;
+    }
+
     let mounted = true;
 
     void getCurrentUserId()
@@ -523,7 +538,7 @@ export default function CreateTaskScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   const beginTaskOperation = (action: string) => {
     taskOperationRef.current = action;
@@ -550,6 +565,8 @@ export default function CreateTaskScreen() {
       const createdTask = await createTaskMutation.mutateAsync({
         title: taskTitle,
         ...(categoryId ? { categoryId } : {}),
+        // Delegated: create the task owned by the managed primary user.
+        ...(managedOwnerId ? { userId: managedOwnerId } : {}),
       });
       if (!createdTask) {
         throw new Error('Task creation returned no task. Please try again.');
@@ -614,6 +631,14 @@ export default function CreateTaskScreen() {
     }
 
     setExitDestination(undefined);
+    // Delegated new task: the caregiver reached here via CaregiverHome →
+    // PatientOverview → AllTasks(ownerId); goBack returns to that patient list.
+    // (The Home-based reset below is for the primary user's own flow.)
+    if (managedOwnerId) {
+      if (navigation.canGoBack()) navigation.goBack();
+      else navigation.navigate('Home');
+      return;
+    }
     if (exitDestination === 'all-tasks') {
       if (fixedCategoryId) {
         // Return to the category view we came from (back from it → Categories).
@@ -799,7 +824,6 @@ export default function CreateTaskScreen() {
           taskId: id,
           ...(trimmedTitle !== savedTitle ? { title: trimmedTitle } : {}),
           ...(categoryChanged && categoryId ? { categoryId } : {}),
-          ...(scheduleChanged ? { schedule: schedule ?? null } : {}),
           ...(descriptionChanged ? { description: trimmedDescription || null } : {}),
         });
         if (!updatedTask) {

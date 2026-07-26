@@ -28,6 +28,7 @@ import type {
   DeleteMediaAssetInput,
   DeleteTaskStepInput,
   GeneratedAiTask,
+  GeneratedReport,
   GenerateReportInput,
   GenerateTaskStepsInput,
   JsonValue,
@@ -37,6 +38,7 @@ import type {
   PageInput,
   ReorderTaskStepsInput,
   Report,
+  SaveReportInput,
   SelectPrimaryUserInput,
   SetAssignmentStepCompletionInput,
   SupportLink,
@@ -527,11 +529,21 @@ export const canPlanApi = {
     return data.getReportDownloadUrl;
   },
 
-  async generateReport(input: GenerateReportInput): Promise<Report> {
+  /** Step 1 of report creation: produce an UNSAVED draft (+ draftToken). */
+  async generateReport(input: GenerateReportInput): Promise<GeneratedReport> {
     const data = await graphqlRequest<
-      { generateReport: RawReport },
+      { generateReport: GeneratedReport },
       { input: GenerateReportInput }
     >(operations.GENERATE_REPORT, { input });
-    return mapReport(data.generateReport);
+    return data.generateReport;
+  },
+
+  /** Step 2: persist a draft from generateReport (fields echoed back verbatim). */
+  async saveReport(input: SaveReportInput): Promise<Report> {
+    const data = await graphqlRequest<
+      { saveReport: RawReport },
+      { input: SaveReportInput }
+    >(operations.SAVE_REPORT, { input });
+    return mapReport(data.saveReport);
   },
 };

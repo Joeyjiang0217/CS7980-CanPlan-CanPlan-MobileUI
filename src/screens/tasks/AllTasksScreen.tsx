@@ -183,7 +183,18 @@ export default function AllTasksScreen() {
             !categoryMode && !managed && !showSimple ? styles.headerSideWide : null,
           ]}
         >
-          {categoryMode || managed ? null : showSimple ? (
+          {categoryMode ? null : managed ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add a task"
+              onPress={() =>
+                navigation.navigate('CreateTask', { ownerId: managedOwnerId, managingName })
+              }
+              style={({ pressed }) => [styles.headerIconButton, pressed ? styles.pressed : null]}
+            >
+              <Ionicons name="add" size={24} color={colors.text} />
+            </Pressable>
+          ) : showSimple ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Settings"
@@ -219,7 +230,7 @@ export default function AllTasksScreen() {
         <View style={styles.banner}>
           <Ionicons name="people" size={16} color={colors.primary} />
           <Text style={styles.bannerText} numberOfLines={1}>
-            Managing {managingName ?? 'this person'} · view only
+            Managing {managingName ?? 'this person'}
           </Text>
         </View>
       ) : null}
@@ -280,17 +291,17 @@ export default function AllTasksScreen() {
           </Pressable>
         ) : null}
 
-        {!managed && (categoryMode || !showSimple) ? (
+        {categoryMode || !showSimple || managed ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add a task"
             onPress={() =>
-              navigation.navigate(
-                'CreateTask',
-                categoryMode
+              navigation.navigate('CreateTask', {
+                ...(categoryMode
                   ? { fixedCategoryId: categoryId, fixedCategoryName: categoryName }
-                  : undefined,
-              )
+                  : {}),
+                ...(managed ? { ownerId: managedOwnerId, managingName } : {}),
+              })
             }
             style={({ pressed }) => [styles.addTaskButton, pressed ? styles.addTaskButtonPressed : null]}
           >

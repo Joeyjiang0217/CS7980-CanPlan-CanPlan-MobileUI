@@ -8,10 +8,11 @@ import {
 import { canPlanApi } from '../../../shared/api/canplanApi';
 import type {
   GenerateReportInput,
+  Report,
   SupportLink,
 } from '../../../shared/api/canplanTypes';
 import { queryKeys } from '../../../shared/query/queryKeys';
-import { fetchReportDocument, generateReport, listReports } from '../api/reportApi';
+import { fetchReportDocument, generateReport, listReports, saveReport } from '../api/reportApi';
 
 /** Paginated report history for one cared-for user, newest first. */
 export function useReports(userId: string, limit = 20) {
@@ -29,7 +30,20 @@ export function useGenerateReport() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: GenerateReportInput) => generateReport(input),
+    // Two-step on the backend: generate an unsaved draft, then persist it,
+    // echoing the draft's fields back verbatim. Returns the saved Report so
+    // callers get a reportId to navigate to.
+    mutationFn: async (input: GenerateReportInput): Promise<Report> => {
+      const draft = await generateReport(input);
+      return saveReport({
+        draftToken: draft.draftToken,
+        scope: draft.scope,
+        dateRange: draft.dateRange,
+        generatedAt: draft.generatedAt,
+        narrative: draft.narrative,
+        stats: draft.stats,
+      });
+    },
     onSuccess: (_report, input) => {
       // Prefix-invalidate every page-size variant of this user's report list.
       void queryClient.invalidateQueries({
