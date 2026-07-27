@@ -6,6 +6,7 @@ import type {
   DeleteTaskStepInput,
   ReorderTaskStepsInput,
   UpdateTaskInput,
+  UpdateTaskOrderInput,
   UpdateTaskStepInput,
 } from '../../../shared/api/canplanTypes';
 import { queryKeys } from '../../../shared/query/queryKeys';
@@ -20,6 +21,7 @@ import {
   listTasksByOwner,
   reorderTaskSteps,
   updateTask,
+  updateTaskOrder,
   updateTaskStep,
 } from '../api/taskApi';
 
@@ -112,4 +114,8 @@ export function useDeleteTaskStep() {
 
 export function useReorderTaskSteps() {
   return useTaskMutation((input: ReorderTaskStepsInput) => reorderTaskSteps(input));
+}
+
+export function useUpdateTaskOrder() {
+  return useTaskMutation((input: UpdateTaskOrderInput) => updateTaskOrder(input));
 }

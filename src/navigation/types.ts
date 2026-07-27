@@ -5,6 +5,8 @@
  * root (App.tsx) based on session state, not nested.
  */
 
+import type { TaskInstanceStatus } from '../shared/api/canplanTypes';
+
 export type AuthStackParamList = {
   SignIn: undefined;
   /**
@@ -32,31 +34,28 @@ export type OnboardingStackParamList = {
 export type MainStackParamList = {
   Home: undefined;
   /**
-   * Caregiver (SUPPORT_PERSON) landing screen: greeting + the list of primary
-   * users linked to this supporter. The initial Main-stack route when the
-   * signed-in profile's role is SUPPORT_PERSON (see App.tsx). Selecting a
-   * person drills into their (currently read-only) data.
+   * Caregiver (SUPPORT_PERSON) landing: the list of linked primary users. The
+   * initial Main-stack route when the signed-in profile's role is
+   * SUPPORT_PERSON (see App.tsx).
    */
   CaregiverHome: undefined;
-  /**
-   * Caregiver drill-in for one supported person: an overview shell showing the
-   * data a supporter can currently read (progress reports). Task/category/
-   * calendar sections are shown as unavailable until the backend grants
-   * supporter-scoped reads of a primary user's live data.
-   */
+  /** Caregiver drill-in for one linked primary user (reports/tasks/categories/calendar). */
   PatientOverview: { userId: string; displayName: string };
+  /** With `ownerId` (caregiver delegated): a linked primary user's calendar. */
+  Calendar: { ownerId?: string; managingName?: string } | undefined;
   Settings: undefined;
-  /**
-   * Own categories, or — with `ownerId` (caregiver delegated) — a linked primary
-   * user's categories with full management and a "Managing {managingName}" banner.
-   */
+  Interface: undefined;
+  Notifications: undefined;
+  AudioSpeech: undefined;
+  Statistics: undefined;
+  PrivacyPolicy: undefined;
+  /** With `ownerId` (caregiver delegated): a linked primary user's categories. */
   Categories: { ownerId?: string; managingName?: string } | undefined;
   /**
    * Without params: all of the owner's tasks. With `categoryId`: only tasks in
    * that category (the back button returns to Categories; `categoryName` titles
    * the screen). With `ownerId` (caregiver delegated): a linked primary user's
-   * tasks, with a "Managing {managingName}" banner; adding a task is allowed
-   * (created under that user), reorder/Manage is hidden.
+   * tasks, with a "Managing {managingName}" banner.
    */
   AllTasks:
     | {
@@ -67,26 +66,73 @@ export type MainStackParamList = {
       }
     | undefined;
   ManageTasks: undefined;
-  TaskView: { taskId: string };
+  /**
+   * View a task's steps. With the optional occurrence fields it runs as an
+   * instance "runner" (step check-off + progress); without them it's a plain
+   * template view.
+   */
+  TaskView: {
+    taskId: string;
+    assignmentId?: string;
+    scheduledDate?: string;
+    scheduledTime?: string;
+    scheduledFor?: string;
+    /** Present when the occurrence is already materialized (skips re-starting it). */
+    instanceId?: string;
+    /** The occurrence's current status, so the runner can gate done/skip/overdue. */
+    status?: TaskInstanceStatus;
+    /** Set by the step player as it pages, so the list re-centres on return. */
+    focusStepId?: string;
+  };
   TaskDetail: { taskId: string };
+  /** Single-step focus view. Occurrence fields enable the done/undo toggle. */
+  StepDetail: {
+    taskId: string;
+    stepId: string;
+    assignmentId?: string;
+    scheduledDate?: string;
+    scheduledTime?: string;
+    /** Present when the occurrence is already materialized (skips re-starting it). */
+    instanceId?: string;
+    /** Occurrence status — completed/skipped render the step read-only. */
+    status?: TaskInstanceStatus;
+  };
   /**
    * `fixedCategoryId` pins the new task to one category and hides the category
    * picker (used when creating from a category view); `fixedCategoryName` titles
-   * the list we return to after saving. `ownerId` (caregiver delegated) creates
-   * the new task under a linked primary user (editing an existing task derives
-   * the owner from the task itself, so no param is needed then).
+   * the list we return to after saving.
    */
   CreateTask:
     | {
         taskId?: string;
         fixedCategoryId?: string;
         fixedCategoryName?: string;
+        /** After creating a brand-new task, continue to scheduling it. */
+        scheduleAfterCreate?: boolean;
+        /**
+         * Caregiver delegated: create the new task under a linked primary user
+         * (editing an existing task derives the owner from the task itself).
+         */
         ownerId?: string;
         managingName?: string;
       }
     | undefined;
   CreateTaskStep: { taskId: string; stepId?: string };
   ReorderSteps: { taskId: string };
+  /** Pick an existing task to schedule onto the calendar. */
+  SelectTask: undefined;
+  /** Create a TaskAssignment (date/time/repeat) for an existing task. */
+  ScheduleAssignment: { taskId: string; taskTitle?: string };
+  /** One occurrence (from the calendar feed) — view details and delete. */
+  OccurrenceDetail: {
+    assignmentId: string;
+    taskId: string;
+    taskTitle: string;
+    scheduledDate: string;
+    scheduledTime: string;
+    status: TaskInstanceStatus;
+    isVirtual: boolean;
+  };
   /** Supporter-only: pick which cared-for user's reports to view. */
   ReportPeople: undefined;
   /** Report history + generation for one cared-for user. */

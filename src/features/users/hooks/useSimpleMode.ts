@@ -1,10 +1,11 @@
+import { useInterfaceSettings } from '../../settings/interfaceSettings';
 import type { JsonValue } from '../../../shared/api/canplanTypes';
-import { useMyProfile } from './useMyProfile';
 
 /**
  * Reads `simpleMode` out of a profile's free-form accessibilitySettings object.
- * Anything that isn't a plain object with `simpleMode === true` is treated as
- * "off", so a missing/guest profile safely defaults to the regular UI.
+ * Kept for the future cloud-sync pass — the app's effective Simple Mode is
+ * currently the LOCAL interface setting (Joe's call: all settings stay
+ * device-local for now, no cloud writes).
  */
 export function readSimpleMode(
   settings: JsonValue | null | undefined,
@@ -18,10 +19,9 @@ export function readSimpleMode(
 }
 
 /**
- * Whether the signed-in user has Simple Mode enabled. Reads from the shared
- * `myProfile` cache (no extra fetch), so screens can branch their layout on it.
+ * Whether Simple Mode is enabled — driven by the locally persisted interface
+ * settings (Settings → Interface), so screens branch their layout on it.
  */
 export function useSimpleMode(): boolean {
-  const { data: profile } = useMyProfile();
-  return readSimpleMode(profile?.accessibilitySettings);
+  return useInterfaceSettings().simpleMode;
 }

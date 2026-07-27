@@ -120,7 +120,7 @@ export default function CaregiverHomeScreen() {
   // "Add a person" flow: pick a PRIMARY_USER from the caller's organization
   // (that isn't already linked or the caller themselves) and link them.
   const [addVisible, setAddVisible] = useState(false);
-  const orgQuery = useMyOrganizationUsers(addVisible);
+  const orgQuery = useMyOrganizationUsers(50, addVisible);
   const selectMutation = useSelectPrimaryUser();
 
   const linkedIds = useMemo(
@@ -138,7 +138,7 @@ export default function CaregiverHomeScreen() {
   }, [orgQuery.data, supporterId, linkedIds]);
 
   const handleLink = (userId: string) => {
-    selectMutation.mutate(userId, {
+    selectMutation.mutate({ primaryUserId: userId }, {
       onSuccess: () => {
         setAddVisible(false);
         void peopleQuery.refetch();
@@ -306,7 +306,9 @@ export default function CaregiverHomeScreen() {
               ]}
               renderItem={({ item }) => {
                 const name = item.displayName?.trim() || `User ${item.userId.slice(0, 8)}`;
-                const linking = selectMutation.isPending && selectMutation.variables === item.userId;
+                const linking =
+                  selectMutation.isPending &&
+                  selectMutation.variables?.primaryUserId === item.userId;
                 return (
                   <View style={styles.card}>
                     <View style={[styles.avatar, { backgroundColor: avatarColorFor(item.userId) }]}>

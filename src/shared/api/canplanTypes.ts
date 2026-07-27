@@ -1,5 +1,5 @@
 /**
- * TypeScript contract for the CanPlan GraphQL schema (2026-06-22).
+ * TypeScript contract for the CanPlan GraphQL schema.
  *
  * These are the public client types, not generated transport types. In
  * particular, AWSJSON values are exposed as parsed JSON and encoded by
@@ -14,11 +14,30 @@ export type JsonValue =
 
 export type UserRole = 'PRIMARY_USER' | 'SUPPORT_PERSON' | 'ORG_ADMIN';
 export type SupportLinkStatus = 'PENDING' | 'ACTIVE' | 'REVOKED';
-export type AssignmentStatus = 'TO_DO' | 'OVERDUE' | 'COMPLETED' | 'SKIPPED';
-/** Values allowed by updateAssignmentStatus; OVERDUE is derived by the API. */
-export type PersistedAssignmentStatus = Exclude<AssignmentStatus, 'OVERDUE'>;
 export type MediaType = 'IMAGE' | 'AUDIO' | 'VIDEO';
-export type RepeatUnit = 'MINUTE' | 'HOUR' | 'DAY' | 'WEEK' | 'MONTH';
+export type AdminBaseRole = 'PRIMARY_USER' | 'SUPPORT_PERSON' | 'ORG_ADMIN';
+export type AiTaskGroundingMode = 'GROUNDED_ONLY' | 'ALLOW_UNGROUNDED_FALLBACK';
+export type AiTaskGenerationSource = 'CORPUS' | 'UNGROUNDED_AI';
+
+/** How a TaskAssignment recurs: a single occurrence, or a recurrence rule. */
+export type TaskAssignmentScheduleType = 'ONE_TIME' | 'RECURRING';
+
+/**
+ * A TaskInstance's lifecycle. OVERDUE is a derived, read-only status; clients
+ * must never send it to a mutation.
+ */
+export type TaskInstanceStatus =
+  | 'TO_DO'
+  | 'IN_PROGRESS'
+  | 'OVERDUE'
+  | 'COMPLETED'
+  | 'SKIPPED'
+  | 'CANCELLED';
+/**
+ * Values accepted by updateTaskInstanceStatus. OVERDUE is derived; CANCELLED
+ * goes through cancelTaskInstance instead.
+ */
+export type PersistedTaskInstanceStatus = 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED';
 
 export interface UserProfile {
   userId: string;
@@ -41,6 +60,13 @@ export interface SupportLink {
   updatedAt?: string | null;
 }
 
+export interface Organization {
+  organizationId: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Category {
   categoryId: string;
   ownerId: string;
@@ -52,26 +78,19 @@ export interface Category {
   updatedAt: string;
 }
 
-export interface TaskSchedule {
-  repeatEvery: number;
-  repeatUnit: RepeatUnit;
-  firstOccurrenceAt: string;
-  timezone: string;
-  enabled?: boolean | null;
-}
-
+/**
+ * A reusable task template. It carries NO scheduling data — scheduling lives on
+ * TaskAssignment, and per-occurrence status/completion on TaskInstance /
+ * TaskInstanceStep.
+ */
 export interface Task {
   taskId: string;
   ownerId: string;
   title: string;
   categoryId: string;
-  /** Per-owner display order (backend-assigned; gaps allowed). */
+  /** Per-owner global display order across all of the owner's tasks. */
   order?: number | null;
   description?: string | null;
-  scheduleRule?: string | null;
-  schedule?: TaskSchedule | null;
-  nextOccurrenceAt?: string | null;
-  notificationEnabled?: boolean | null;
   coverImageAssetId?: string | null;
   createdAt: string;
   updatedAt?: string | null;
@@ -90,21 +109,77 @@ export interface TaskStep {
   updatedAt?: string | null;
 }
 
-export interface Assignment {
+/**
+ * The schedule rule binding a Task template to a user. ONE_TIME uses
+ * scheduledFor + timezone; RECURRING uses scheduleRule (an RRULE) + startDate +
+ * startTime + timezone (+ optional endDate).
+ */
+export interface TaskAssignment {
   assignmentId: string;
   taskId: string;
   userId: string;
   assignedBy?: string | null;
-  dueDate?: string | null;
-  recurrence?: string | null;
+  scheduleType: TaskAssignmentScheduleType;
+  scheduledFor?: string | null;
   scheduleRule?: string | null;
-  status: AssignmentStatus;
+  startDate?: string | null;
+  endDate?: string | null;
+  startTime?: string | null;
+  timezone: string;
+  active: boolean;
+  endedAt?: string | null;
   assignedAt: string;
   createdAt: string;
   updatedAt?: string | null;
 }
 
-export interface AssignmentStep {
+/** One concrete occurrence of a scheduled assignment, with status + lifecycle timestamps. */
+export interface TaskInstance {
+  instanceId: string;
+  assignmentId: string;
+  taskId: string;
+  userId: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  scheduledFor: string;
+  timezone: string;
+  status: TaskInstanceStatus;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  skippedAt?: string | null;
+  cancelledAt?: string | null;
+  activeStepId?: string | null;
+  activeStepStartedAt?: string | null;
+  activeDurationSeconds: number;
+  elapsedSeconds?: number | null;
+  isException?: boolean | null;
+  createdAt: string;
+  updatedAt?: string | null;
+}
+
+/**
+ * A calendar cell from getTaskInstanceViews: a real TaskInstance overlaid on its
+ * scheduled slot, or a VIRTUAL occurrence with no real instance yet
+ * (isVirtual:true, instanceId:null).
+ */
+export interface TaskInstanceView {
+  instanceId?: string | null;
+  assignmentId: string;
+  taskId: string;
+  userId: string;
+  title: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  scheduledFor: string;
+  timezone: string;
+  status: TaskInstanceStatus;
+  isVirtual: boolean;
+  isException: boolean;
+}
+
+/** An immutable snapshot of one TaskStep captured into a TaskInstance when started. */
+export interface TaskInstanceStep {
+  instanceId: string;
   assignmentId: string;
   taskId: string;
   stepId: string;
@@ -112,8 +187,17 @@ export interface AssignmentStep {
   text: string;
   completed: boolean;
   completedAt?: string | null;
+  firstStartedAt?: string | null;
+  lastStartedAt?: string | null;
+  activeDurationSeconds: number;
   createdAt: string;
-  updatedAt?: string | null;
+  updatedAt: string;
+}
+
+export interface TaskInstanceTimingResult {
+  instance: TaskInstance;
+  activeStep?: TaskInstanceStep | null;
+  previousStep?: TaskInstanceStep | null;
 }
 
 export interface MediaAsset {
@@ -160,10 +244,6 @@ export interface TaskStepsResponse {
   outputTokens?: number | null;
 }
 
-export type AiTaskGroundingMode = 'GROUNDED_ONLY' | 'ALLOW_UNGROUNDED_FALLBACK';
-
-export type AiTaskGenerationSource = 'CORPUS' | 'UNGROUNDED_AI';
-
 /**
  * Preview step from createAiTask. Citations exist on the wire but this app never
  * fetches them (the UI stays deliberately minimal to reduce cognitive load).
@@ -180,6 +260,40 @@ export interface GeneratedAiTask {
   source: AiTaskGenerationSource;
   inputTokens?: number | null;
   outputTokens?: number | null;
+}
+
+export interface AdminUserResult {
+  userId: string;
+  email?: string | null;
+  groups: string[];
+  profile?: UserProfile | null;
+}
+
+export interface AdminDeleteUserResult {
+  userId: string;
+  deletedTasks: number;
+  deletedUserItems: number;
+  deletedSupportLinks: number;
+  deletedCognitoUser: boolean;
+}
+
+export interface AdminUserData {
+  userId: string;
+  profile?: UserProfile | null;
+  tasks: Task[];
+  categories: Category[];
+  taskAssignments: TaskAssignment[];
+  supportLinks: SupportLink[];
+}
+
+export interface AdminDeleteOrganizationResult {
+  organization: Organization;
+  removedUsers: number;
+}
+
+export interface TaskInstanceLookupResult {
+  instanceId: string;
+  item?: TaskInstance | null;
 }
 
 export interface CreateAiTaskInput {
@@ -213,34 +327,27 @@ export interface UpdateMyUserProfileInput {
    * `null` clears the field; omitted leaves it unchanged.
    */
   accessibilitySettings?: JsonValue | null;
+  organizationId?: string | null;
 }
 
-/**
- * Establish (or restore) the caller's support link to a primary user. The
- * supporter is the authenticated caller; both must belong to the same
- * organization. Replaces the removed `createSupportLink`.
- */
 export interface SelectPrimaryUserInput {
   primaryUserId: string;
 }
 
-/** Soft-revoke the caller's support link to a primary user. */
 export interface UnselectPrimaryUserInput {
   primaryUserId: string;
 }
 
 export interface CreateCategoryInput {
+  userId?: string | null;
   name: string;
   color?: string | null;
   sortOrder?: number | null;
-  /** Delegated: target primary user's id. Omitted ⇒ acts on the caller's own. */
-  userId?: string | null;
 }
 
 export interface UpdateCategoryInput {
-  categoryId: string;
-  /** Delegated: target primary user's id. Omitted ⇒ acts on the caller's own. */
   userId?: string | null;
+  categoryId: string;
   /** Omitted ⇒ unchanged. Rejected for the default category and for null. */
   name?: string;
   /** Omitted ⇒ unchanged; explicit null ⇒ cleared. */
@@ -250,17 +357,8 @@ export interface UpdateCategoryInput {
 }
 
 export interface DeleteCategoryInput {
-  categoryId: string;
-  /** Delegated: target primary user's id. Omitted ⇒ acts on the caller's own. */
   userId?: string | null;
-}
-
-export interface TaskScheduleInput {
-  repeatEvery: number;
-  repeatUnit: RepeatUnit;
-  firstOccurrenceAt: string;
-  timezone: string;
-  enabled?: boolean | null;
+  categoryId: string;
 }
 
 export interface CreateTaskStepNestedInput {
@@ -269,15 +367,11 @@ export interface CreateTaskStepNestedInput {
 }
 
 export interface CreateTaskInput {
-  title: string;
-  /** Delegated: create this template owned by the target primary user. Omitted ⇒ the caller. */
   userId?: string | null;
+  title: string;
   categoryId?: string | null;
   description?: string | null;
-  scheduleRule?: string | null;
   steps?: CreateTaskStepNestedInput[] | null;
-  schedule?: TaskScheduleInput | null;
-  notificationEnabled?: boolean | null;
   coverImageS3Key?: string | null;
 }
 
@@ -286,9 +380,6 @@ export interface UpdateTaskInput {
   title?: string | null;
   categoryId?: string | null;
   description?: string | null;
-  scheduleRule?: string | null;
-  schedule?: TaskScheduleInput | null;
-  notificationEnabled?: boolean | null;
   coverImageS3Key?: string | null;
 }
 
@@ -328,29 +419,76 @@ export interface ReorderTaskStepsInput {
   steps: ReorderTaskStepInput[];
 }
 
-export interface CreateAssignmentInput {
+export interface TaskOrderInput {
+  taskId: string;
+  order: number;
+}
+
+export interface UpdateTaskOrderInput {
+  userId?: string | null;
+  tasks: TaskOrderInput[];
+}
+
+export interface CreateTaskAssignmentInput {
   taskId: string;
   userId: string;
   assignedBy?: string | null;
-  dueDate?: string | null;
-  recurrence?: string | null;
+  scheduleType: TaskAssignmentScheduleType;
+  /** ONE_TIME: the single occurrence's ISO datetime. */
+  scheduledFor?: string | null;
+  /** RECURRING: an RRULE string (FREQ required: DAILY/WEEKLY/MONTHLY/YEARLY). */
   scheduleRule?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  startTime?: string | null;
+  timezone: string;
 }
 
-export interface UpdateAssignmentStatusInput {
+export interface StartTaskInstanceInput {
   userId: string;
   assignmentId: string;
-  status: PersistedAssignmentStatus;
+  scheduledDate: string;
+  scheduledTime: string;
 }
 
-export interface SetAssignmentStepCompletionInput {
+export interface UpdateTaskInstanceStatusInput {
   userId: string;
-  assignmentId: string;
+  instanceId: string;
+  status: PersistedTaskInstanceStatus;
+}
+
+export interface SetTaskInstanceStepCompletionInput {
+  userId: string;
+  instanceId: string;
   stepId: string;
   completed: boolean;
 }
 
-export interface DeleteAssignmentInput {
+export interface StartTaskInstanceStepInput {
+  userId: string;
+  instanceId: string;
+  stepId: string;
+}
+
+export interface PauseTaskInstanceTimerInput {
+  userId: string;
+  instanceId: string;
+}
+
+export interface CancelTaskInstanceInput {
+  userId: string;
+  assignmentId: string;
+  scheduledDate: string;
+  scheduledTime: string;
+}
+
+export interface EndTaskAssignmentInput {
+  userId: string;
+  assignmentId: string;
+  effectiveDate: string;
+}
+
+export interface DeleteTaskAssignmentInput {
   userId: string;
   assignmentId: string;
 }
@@ -360,7 +498,7 @@ export interface CreateMediaAssetInput {
   s3Key: string;
   type: MediaType;
   mimeType: string;
-  ownerId: string;
+  ownerId?: string | null;
   size?: number | null;
 }
 
@@ -401,6 +539,46 @@ export interface ReportDateRange {
   to: string;
 }
 
+export interface InviteUserInput {
+  email: string;
+  displayName?: string | null;
+  organizationId?: string | null;
+}
+
+export interface SetUserBaseRoleInput {
+  userId: string;
+  role: AdminBaseRole;
+}
+
+export interface SetSystemAdminInput {
+  userId: string;
+  enabled: boolean;
+}
+
+export interface AdminDeleteUserInput {
+  userId: string;
+  deleteCognitoUser?: boolean | null;
+  disableFirst?: boolean | null;
+}
+
+export interface CreateOrganizationInput {
+  name: string;
+}
+
+export interface UpdateOrganizationInput {
+  organizationId: string;
+  name: string;
+}
+
+export interface DeleteOrganizationInput {
+  organizationId: string;
+}
+
+export interface AdminSetUserOrganizationInput {
+  userId: string;
+  organizationId?: string | null;
+}
+
 /**
  * Report metadata row. `scope` / `dateRange` travel as AWSJSON strings on the
  * wire; the API client parses them into objects before returning.
@@ -419,31 +597,6 @@ export interface GenerateReportInput {
   /** YYYY-MM-DD, inclusive; the backend caps the span at 366 days. */
   from: string;
   to: string;
-}
-
-/**
- * Output of `generateReport` — an UNSAVED draft. `scope`/`dateRange`/`stats`
- * are AWSJSON and are kept as the raw strings the server returned so they can
- * be resubmitted to `saveReport` unchanged (the `draftToken` binds this exact
- * content, so we must not re-serialize it).
- */
-export interface GeneratedReport {
-  draftToken: string;
-  scope: string;
-  dateRange: string;
-  generatedAt: string;
-  narrative: string;
-  stats: string;
-}
-
-/** Persist a previously generated report. Echo the draft's fields verbatim. */
-export interface SaveReportInput {
-  draftToken: string;
-  scope: string;
-  dateRange: string;
-  generatedAt: string;
-  narrative: string;
-  stats: string;
 }
 
 /** Deterministic statistics computed by the backend over a date range. */

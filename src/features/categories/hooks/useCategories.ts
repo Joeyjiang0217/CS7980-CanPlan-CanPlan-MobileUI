@@ -13,17 +13,13 @@ import {
   updateCategory,
 } from '../api/categoryApi';
 
-/**
- * Paginated category list. With no `userId` it returns the authenticated
- * caller's categories (incl. their real default); a SupportPerson may pass a
- * linked primary user's `userId` to read that user's categories (delegated).
- */
-export function useMyCategories(enabled = true, limit = 50, userId?: string) {
+/** Paginated category list for the authenticated user, including their real default category. */
+export function useMyCategories(enabled = true, limit = 50, userId?: string | null) {
   return useInfiniteQuery({
-    queryKey: queryKeys.categories.mine(userId, limit),
+    queryKey: queryKeys.categories.user(userId, limit),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
-      listMyCategories(userId, { limit, nextToken: pageParam }),
+      listMyCategories({ limit, nextToken: pageParam }, userId),
     getNextPageParam: (lastPage) => lastPage.nextToken ?? undefined,
     enabled,
   });

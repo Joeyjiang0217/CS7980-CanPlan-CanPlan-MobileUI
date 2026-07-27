@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -23,8 +23,10 @@ import { DEFAULT_CATEGORY_COLOR } from '../../features/categories/colors';
 import { useTasksByOwner } from '../../features/tasks/hooks/useTaskApi';
 import type { Category } from '../../shared/api/canplanTypes';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
+import { useSimpleMode } from '../../features/users/hooks/useSimpleMode';
 import type { MainStackParamList } from '../../navigation/types';
 import BackButton from '../../shared/components/BackButton';
+import { useSettingsTapGate } from '../../shared/hooks/useSettingsTapGate';
 import { colors, radius, shadow, spacing, typography } from '../../shared/theme/tokens';
 import CategoryFormModal, { type CategoryFormValues } from './CategoryFormModal';
 
@@ -32,13 +34,20 @@ type CategoriesNavigation = NativeStackNavigationProp<MainStackParamList, 'Categ
 
 export default function CategoriesScreen() {
   const navigation = useNavigation<CategoriesNavigation>();
-  const route = useRoute<RouteProp<MainStackParamList, 'Categories'>>();
+  // Simple Mode root form: no back, no edit/add — settings gear behind the
+  // shared 3-tap gate, same as the other simple-mode start pages.
+  const simpleMode = useSimpleMode();
+  const openSettings = useCallback(() => navigation.navigate('Settings'), [navigation]);
+  const { handleSettingsTap, settingsHint } = useSettingsTapGate(openSettings);
   const insets = useSafeAreaInsets();
+  const route = useRoute<RouteProp<MainStackParamList, 'Categories'>>();
 
-  // Caregiver delegated management of a linked primary user's categories.
+  // Caregiver delegated management of a linked primary user's categories. The
+  // caregiver's own Simple Mode must not shape a delegated view.
   const managedOwnerId = route.params?.ownerId;
   const managingName = route.params?.managingName;
   const managed = Boolean(managedOwnerId);
+  const showSimple = simpleMode && !managed;
 
   const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [identityError, setIdentityError] = useState<string>();
@@ -122,13 +131,7 @@ export default function CategoriesScreen() {
   const handleSubmit = (values: CategoryFormValues) => {
     if (formMode === 'create') {
       createMutation.mutate(
-        {
-          name: values.name,
-          color: values.color,
-          sortOrder: nextSortOrder,
-          // Delegated: create under the managed primary user (undefined ⇒ self).
-          userId: managedOwnerId,
-        },
+        { name: values.name, color: values.color, sortOrder: nextSortOrder, userId: managedOwnerId },
         { onSuccess: closeForm, onError: reportError },
       );
       return;
@@ -174,17 +177,42 @@ export default function CategoriesScreen() {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <BackButton onPress={() => navigation.goBack()} variant="dark" />
-        <Text accessibilityRole="header" style={styles.headerTitle}>
-          Categories
-        </Text>
+        {!showSimple ? (
+          <BackButton onPress={() => navigation.goBack()} variant="dark" />
+        ) : (
+          // Invisible mirror of the settings gear so the title centers.
+          <View style={styles.headerSpacer} />
+        )}
+        {showSimple && settingsHint ? (
+          <Text accessibilityRole="header" numberOfLines={1} style={styles.headerHint}>
+            {settingsHint}
+          </Text>
+        ) : (
+          <Text
+            accessibilityRole="header"
+            numberOfLines={1}
+            style={[styles.headerTitle, showSimple ? styles.headerTitleCentered : null]}
+          >
+            Categories
+          </Text>
+        )}
+        {showSimple ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+            onPress={handleSettingsTap}
+            style={({ pressed }) => [styles.settingsButton, pressed ? styles.pressed : null]}
+            hitSlop={6}
+          >
+            <Ionicons name="settings-outline" size={22} color={colors.text} />
+          </Pressable>
+        ) : null}
       </View>
 
-      {managed ? (
-        <View style={styles.banner}>
-          <Ionicons name="people" size={16} color={colors.primary} />
-          <Text style={styles.bannerText} numberOfLines={1}>
-            Managing {managingName ?? 'this person'}
+      {managed && managingName ? (
+        <View style={styles.managingBanner}>
+          <Text style={styles.managingBannerText} numberOfLines={1}>
+            Managing {managingName}
           </Text>
         </View>
       ) : null}
@@ -230,7 +258,6 @@ export default function CategoriesScreen() {
                         navigation.navigate('AllTasks', {
                           categoryId: category.categoryId,
                           categoryName: category.name,
-                          ...(managed ? { ownerId: managedOwnerId, managingName } : {}),
                         })
                       }
                       style={styles.rowMain}
@@ -245,21 +272,25 @@ export default function CategoriesScreen() {
                       </View>
                       <Ionicons name="chevron-forward" size={22} color={colors.disabled} />
                     </Pressable>
-                    <View style={styles.editDivider} />
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Edit ${category.name}`}
-                      onPress={() => {
-                        setEditing(category);
-                        setFormMode('edit');
-                      }}
-                      style={({ pressed }) => [
-                        styles.editButton,
-                        pressed ? styles.pressed : null,
-                      ]}
-                    >
-                      <Text style={styles.editText}>Edit</Text>
-                    </Pressable>
+                    {!showSimple ? (
+                      <>
+                        <View style={styles.editDivider} />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Edit ${category.name}`}
+                          onPress={() => {
+                            setEditing(category);
+                            setFormMode('edit');
+                          }}
+                          style={({ pressed }) => [
+                            styles.editButton,
+                            pressed ? styles.pressed : null,
+                          ]}
+                        >
+                          <Text style={styles.editText}>Edit</Text>
+                        </Pressable>
+                      </>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -267,7 +298,7 @@ export default function CategoriesScreen() {
           </View>
         ) : null}
 
-        {!error && !categoriesQuery.isLoading ? (
+        {!error && !categoriesQuery.isLoading && !showSimple ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add a category"
@@ -304,22 +335,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  banner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginHorizontal: spacing.xl,
-    marginBottom: spacing.md,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surfaceWarm,
-  },
-  bannerText: {
-    ...typography.bodyStrong,
-    color: colors.text,
-    flexShrink: 1,
-  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -331,6 +346,38 @@ const styles = StyleSheet.create({
     flex: 1,
     ...typography.title,
     color: colors.text,
+  },
+  settingsButton: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceWarm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitleCentered: {
+    textAlign: 'center',
+  },
+  headerSpacer: {
+    width: 44,
+  },
+  // Delegated context strip — mirrors the caregiver overview "Managing {name}".
+  managingBanner: {
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.md,
+    backgroundColor: colors.surfaceWarm,
+  },
+  managingBannerText: {
+    ...typography.bodyStrong,
+    color: colors.text,
+    textAlign: 'center',
+  },
+  // 3-tap settings hint — same look as the simple All Tasks header prompt.
+  headerHint: {
+    flex: 1,
+    ...typography.heading,
+    color: colors.text,
+    textAlign: 'center',
   },
   content: {
     paddingHorizontal: spacing.xl,

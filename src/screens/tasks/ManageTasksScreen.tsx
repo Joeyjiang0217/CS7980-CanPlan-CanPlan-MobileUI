@@ -5,24 +5,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-  type SharedValue,
-} from 'react-native-reanimated';
+import DraggableFlatList, {
+  ScaleDecorator,
+  type RenderItemParams,
+} from 'react-native-draggable-flatlist';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useMyCategories } from '../../features/categories/hooks/useCategories';
+import { useInterfaceSettings } from '../../features/settings/interfaceSettings';
 import {
   useDeleteTask,
   useTasksByOwner,
@@ -37,10 +33,7 @@ import ConfirmDialog from '../../shared/components/ConfirmDialog';
 import { colors, radius, shadow, spacing, typography } from '../../shared/theme/tokens';
 
 type ManageTasksNavigation = NativeStackNavigationProp<MainStackParamList, 'ManageTasks'>;
-type TaskPositions = Record<string, number>;
 
-const MANAGE_TASK_ROW_SLOT_HEIGHT = 64;
-const REORDER_ANIMATION_DURATION_MS = 260;
 // Wait for the confirm dialog to finish closing before the success toast shows,
 // so the two don't overlap. Raise this number to make the toast appear later.
 const MOVE_SUCCESS_TOAST_DELAY_MS = 400;
@@ -69,49 +62,11 @@ function orderTasksByIds(tasks: Task[], orderedIds: string[]) {
   return ordered;
 }
 
-function makeTaskPositions(tasks: Task[]) {
-  return tasks.reduce<TaskPositions>((positions, task, index) => {
-    positions[task.taskId] = index;
-    return positions;
-  }, {});
-}
-
-function orderedIdsFromPositions(positions: TaskPositions) {
-  return Object.entries(positions)
-    .sort(([, a], [, b]) => a - b)
-    .map(([taskId]) => taskId);
-}
-
-function clampIndex(value: number, max: number) {
-  'worklet';
-  return Math.min(Math.max(value, 0), max);
-}
-
-function movePosition(positions: TaskPositions, from: number, to: number) {
-  'worklet';
-
-  if (from === to) return positions;
-
-  const next = { ...positions };
-  const movingDown = to > from;
-
-  for (const taskId in positions) {
-    const position = positions[taskId];
-    if (position === from) {
-      next[taskId] = to;
-    } else if (movingDown && position > from && position <= to) {
-      next[taskId] = position - 1;
-    } else if (!movingDown && position >= to && position < from) {
-      next[taskId] = position + 1;
-    }
-  }
-
-  return next;
-}
-
 export default function ManageTasksScreen() {
   const navigation = useNavigation<ManageTasksNavigation>();
   const insets = useSafeAreaInsets();
+  // Interface setting: with categories disabled the "Add to" action is hidden.
+  const { useCategories } = useInterfaceSettings();
   const [ownerId, setOwnerId] = useState('');
   const [identityError, setIdentityError] = useState<string>();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -125,7 +80,7 @@ export default function ManageTasksScreen() {
   const [orderedTasks, setOrderedTasks] = useState<Task[]>([]);
   const latestTaskOrderRef = useRef<string[]>([]);
   const tasksQuery = useTasksByOwner(ownerId);
-  const categoriesQuery = useMyCategories(Boolean(ownerId));
+  const categoriesQuery = useMyCategories(Boolean(ownerId), 50, ownerId);
   const deleteTaskMutation = useDeleteTask();
   const updateTaskMutation = useUpdateTask();
 
@@ -278,9 +233,45 @@ export default function ManageTasksScreen() {
     }
   };
 
-  const handleOrderChange = useCallback((positions: TaskPositions) => {
-    latestTaskOrderRef.current = orderedIdsFromPositions(positions);
+  const handleReorder = useCallback((data: Task[]) => {
+    latestTaskOrderRef.current = data.map((task) => task.taskId);
+    setOrderedTasks(data);
   }, []);
+
+  const renderItem = useCallback(
+    ({ item, drag, isActive }: RenderItemParams<Task>) => {
+      const selected = selectedIds.has(item.taskId);
+      return (
+        <ScaleDecorator>
+          <View style={[styles.row, isActive ? styles.rowActive : null]}>
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: selected }}
+              accessibilityLabel={`Select ${item.title}`}
+              onPress={() => toggleSelected(item.taskId)}
+              hitSlop={8}
+              style={[styles.checkbox, selected ? styles.checkboxChecked : null]}
+            >
+              {selected ? <Ionicons name="checkmark" size={18} color={colors.onPrimary} /> : null}
+            </Pressable>
+            <Text numberOfLines={1} style={styles.rowTitle}>
+              {item.title}
+            </Text>
+            <Pressable
+              accessibilityLabel={`Drag ${item.title} to reorder`}
+              onPressIn={drag}
+              disabled={isActive}
+              hitSlop={8}
+              style={styles.dragHandle}
+            >
+              <Ionicons name="reorder-three" size={28} color={colors.textMuted} />
+            </Pressable>
+          </View>
+        </ScaleDecorator>
+      );
+    },
+    [selectedIds, toggleSelected],
+  );
 
   return (
     <View style={styles.root}>
@@ -313,15 +304,19 @@ export default function ManageTasksScreen() {
           <Text style={styles.loadingText}>Loading tasks…</Text>
         </View>
       ) : (
-        <SortableTaskList
-          tasks={orderedTasks}
-          selectedIds={selectedIds}
-          onToggle={toggleSelected}
-          onOrderChange={handleOrderChange}
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingBottom: insets.bottom + 96 + spacing.xl },
-          ]}
+        <DraggableFlatList
+          data={orderedTasks}
+          keyExtractor={(task) => task.taskId}
+          renderItem={renderItem}
+          onDragEnd={({ data }) => handleReorder(data)}
+          activationDistance={12}
+          autoscrollThreshold={90}
+          autoscrollSpeed={180}
+          showsVerticalScrollIndicator={false}
+          containerStyle={styles.list}
+          contentContainerStyle={
+            [styles.listContent, { paddingBottom: spacing.xl }] as StyleProp<ViewStyle>
+          }
         />
       )}
 
@@ -332,12 +327,14 @@ export default function ManageTasksScreen() {
           disabled={actionsDisabled}
           onPress={() => setConfirmDelete(true)}
         />
-        <BottomAction
-          icon="folder-open-outline"
-          label="Add to"
-          disabled={actionsDisabled}
-          onPress={() => setCategorySheetVisible(true)}
-        />
+        {useCategories ? (
+          <BottomAction
+            icon="folder-open-outline"
+            label="Add to"
+            disabled={actionsDisabled}
+            onPress={() => setCategorySheetVisible(true)}
+          />
+        ) : null}
       </View>
 
       <ConfirmDialog
@@ -398,150 +395,6 @@ export default function ManageTasksScreen() {
         </View>
       ) : null}
     </View>
-  );
-}
-
-interface SortableTaskListProps {
-  tasks: Task[];
-  selectedIds: Set<string>;
-  onToggle: (taskId: string) => void;
-  onOrderChange: (positions: TaskPositions) => void;
-  contentContainerStyle: StyleProp<ViewStyle>;
-}
-
-function SortableTaskList({
-  tasks,
-  selectedIds,
-  onToggle,
-  onOrderChange,
-  contentContainerStyle,
-}: SortableTaskListProps) {
-  const [scrollEnabled, setScrollEnabled] = useState(true);
-  const positions = useSharedValue<TaskPositions>(makeTaskPositions(tasks));
-  const taskIdsKey = useMemo(() => tasks.map((task) => task.taskId).join('|'), [tasks]);
-
-  useEffect(() => {
-    const nextPositions = makeTaskPositions(tasks);
-    positions.value = nextPositions;
-    onOrderChange(nextPositions);
-  }, [onOrderChange, positions, taskIdsKey, tasks]);
-
-  return (
-    <ScrollView
-      style={styles.list}
-      contentContainerStyle={contentContainerStyle}
-      scrollEnabled={scrollEnabled}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={[styles.listItemsStack, { height: tasks.length * MANAGE_TASK_ROW_SLOT_HEIGHT }]}>
-        {tasks.map((task) => (
-          <SortableTaskRow
-            key={task.taskId}
-            item={task}
-            positions={positions}
-            itemCount={tasks.length}
-            selected={selectedIds.has(task.taskId)}
-            onToggle={onToggle}
-            onOrderChange={onOrderChange}
-            setScrollEnabled={setScrollEnabled}
-          />
-        ))}
-      </View>
-    </ScrollView>
-  );
-}
-
-interface SortableTaskRowProps {
-  item: Task;
-  positions: SharedValue<TaskPositions>;
-  itemCount: number;
-  selected: boolean;
-  onToggle: (taskId: string) => void;
-  onOrderChange: (positions: TaskPositions) => void;
-  setScrollEnabled: (enabled: boolean) => void;
-}
-
-function SortableTaskRow({
-  item,
-  positions,
-  itemCount,
-  selected,
-  onToggle,
-  onOrderChange,
-  setScrollEnabled,
-}: SortableTaskRowProps) {
-  const isDragging = useSharedValue(false);
-  const dragTop = useSharedValue(0);
-  const startTop = useSharedValue(0);
-
-  const gesture = Gesture.Pan()
-    .activateAfterLongPress(120)
-    .shouldCancelWhenOutside(false)
-    .onStart(() => {
-      const currentPosition = positions.value[item.taskId] ?? 0;
-      startTop.value = currentPosition * MANAGE_TASK_ROW_SLOT_HEIGHT;
-      dragTop.value = startTop.value;
-      isDragging.value = true;
-      runOnJS(setScrollEnabled)(false);
-    })
-    .onUpdate((event) => {
-      const nextTop = startTop.value + event.translationY;
-      const nextPosition = clampIndex(
-        Math.round(nextTop / MANAGE_TASK_ROW_SLOT_HEIGHT),
-        itemCount - 1,
-      );
-      const currentPosition = positions.value[item.taskId] ?? 0;
-
-      dragTop.value = nextTop;
-      if (nextPosition !== currentPosition) {
-        positions.value = movePosition(positions.value, currentPosition, nextPosition);
-      }
-    })
-    .onFinalize(() => {
-      const finalTop = (positions.value[item.taskId] ?? 0) * MANAGE_TASK_ROW_SLOT_HEIGHT;
-      dragTop.value = withTiming(finalTop, { duration: REORDER_ANIMATION_DURATION_MS }, () => {
-        isDragging.value = false;
-        runOnJS(setScrollEnabled)(true);
-        runOnJS(onOrderChange)({ ...positions.value });
-      });
-    });
-
-  const animatedStyle = useAnimatedStyle(() => {
-    const restingTop = (positions.value[item.taskId] ?? 0) * MANAGE_TASK_ROW_SLOT_HEIGHT;
-
-    return {
-      top: isDragging.value
-        ? dragTop.value
-        : withTiming(restingTop, { duration: REORDER_ANIMATION_DURATION_MS }),
-      zIndex: isDragging.value ? 10 : 0,
-    };
-  });
-
-  return (
-    <Animated.View style={[styles.row, animatedStyle]}>
-      <Pressable
-        accessibilityRole="checkbox"
-        accessibilityState={{ checked: selected }}
-        accessibilityLabel={`Select ${item.title}`}
-        onPress={() => onToggle(item.taskId)}
-        hitSlop={8}
-        style={[styles.checkbox, selected ? styles.checkboxChecked : null]}
-      >
-        {selected ? <Ionicons name="checkmark" size={18} color={colors.onPrimary} /> : null}
-      </Pressable>
-      <Text numberOfLines={1} style={styles.rowTitle}>
-        {item.title}
-      </Text>
-      <GestureDetector gesture={gesture}>
-        <Pressable
-          accessibilityLabel={`Drag ${item.title} to reorder`}
-          hitSlop={8}
-          style={styles.dragHandle}
-        >
-          <Ionicons name="reorder-three" size={28} color={colors.textMuted} />
-        </Pressable>
-      </GestureDetector>
-    </Animated.View>
   );
 }
 
@@ -626,32 +479,30 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textMuted,
   },
+  list: {
+    flex: 1,
+  },
   listContent: {
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.sm,
   },
-  list: {
-    backgroundColor: colors.bg,
-  },
-  listItemsStack: {
-    position: 'relative',
-  },
   row: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.lg,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.md,
-    minHeight: MANAGE_TASK_ROW_SLOT_HEIGHT - spacing.md,
+    minHeight: 52,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     ...shadow.card,
+  },
+  rowActive: {
+    borderColor: colors.primary,
+    ...shadow.cardStrong,
   },
   checkbox: {
     width: 26,
@@ -676,10 +527,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xs,
   },
   bottomBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     flexDirection: 'row',
     paddingTop: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,

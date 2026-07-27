@@ -24,8 +24,6 @@ export default function TaskDetailScreen() {
   const { taskId } = route.params;
 
   const taskQuery = useTask(taskId);
-  // Resolve the chip against the task OWNER's categories — for a caregiver
-  // viewing a linked user's task, that's the primary user's list (delegated).
   const categoriesQuery = useMyCategories(
     Boolean(taskQuery.data?.ownerId),
     50,

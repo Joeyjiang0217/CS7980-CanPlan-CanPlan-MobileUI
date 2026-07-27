@@ -12,18 +12,30 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppProviders } from './src/app/AppProviders';
 import { useSession } from './src/app/SessionContext';
 import { useCurrentUser } from './src/features/auth';
+import TaskReminderManager from './src/features/notifications/TaskReminderManager';
+import {
+  startingPageRouteName,
+  useInterfaceSettings,
+  useInterfaceSettingsHydrated,
+} from './src/features/settings/interfaceSettings';
+import { navigationRef } from './src/navigation/navigationRef';
 import { useMyProfile } from './src/features/users/hooks/useMyProfile';
-import { readSimpleMode } from './src/features/users/hooks/useSimpleMode';
 import CreateAccountScreen from './src/screens/auth/CreateAccountScreen';
 import ForgotPasswordResetScreen from './src/screens/auth/ForgotPasswordResetScreen';
 import ForgotPasswordScreen from './src/screens/auth/ForgotPasswordScreen';
 import OnboardingNameScreen from './src/screens/auth/OnboardingNameScreen';
 import SignInScreen from './src/screens/auth/SignInScreen';
 import VerifyEmailScreen from './src/screens/auth/VerifyEmailScreen';
+import AudioSpeechSettingsScreen from './src/screens/AudioSpeechSettingsScreen';
+import CalendarScreen from './src/screens/CalendarScreen';
 import HomeScreen from './src/screens/HomeScreen';
-import SettingsScreen from './src/screens/SettingsScreen';
 import CaregiverHomeScreen from './src/screens/caregiver/CaregiverHomeScreen';
 import PatientOverviewScreen from './src/screens/caregiver/PatientOverviewScreen';
+import InterfaceSettingsScreen from './src/screens/InterfaceSettingsScreen';
+import NotificationsSettingsScreen from './src/screens/NotificationsSettingsScreen';
+import PrivacyPolicySettingsScreen from './src/screens/PrivacyPolicySettingsScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
+import StatisticsSettingsScreen from './src/screens/StatisticsSettingsScreen';
 import CategoriesScreen from './src/screens/categories/CategoriesScreen';
 import ReportsScreen from './src/screens/reports/ReportsScreen';
 import ReportViewScreen from './src/screens/reports/ReportViewScreen';
@@ -32,7 +44,11 @@ import AllTasksScreen from './src/screens/tasks/AllTasksScreen';
 import CreateTaskScreen from './src/screens/tasks/CreateTaskScreen';
 import CreateTaskStepScreen from './src/screens/tasks/CreateTaskStepScreen';
 import ManageTasksScreen from './src/screens/tasks/ManageTasksScreen';
+import OccurrenceDetailScreen from './src/screens/tasks/OccurrenceDetailScreen';
 import ReorderStepsScreen from './src/screens/tasks/ReorderStepsScreen';
+import ScheduleAssignmentScreen from './src/screens/tasks/ScheduleAssignmentScreen';
+import SelectTaskScreen from './src/screens/tasks/SelectTaskScreen';
+import StepDetailScreen from './src/screens/tasks/StepDetailScreen';
 import TaskDetailScreen from './src/screens/tasks/TaskDetailScreen';
 import TaskViewScreen from './src/screens/tasks/TaskViewScreen';
 import { colors } from './src/shared/theme/tokens';
@@ -58,8 +74,13 @@ function RootStack() {
   const { data: profile, isLoading: profileLoading } = useMyProfile({
     enabled: !!currentUser && !isGuest,
   });
+  // Simple Mode + starting page come from the locally persisted interface
+  // settings; wait for the AsyncStorage read (milliseconds) so a Simple Mode
+  // start page doesn't flash Home on relaunch.
+  const interfaceSettings = useInterfaceSettings();
+  const settingsHydrated = useInterfaceSettingsHydrated();
 
-  if (userLoading) {
+  if (userLoading || !settingsHydrated) {
     return <Splash />;
   }
   // Real user signed in but the profile fetch hasn't completed yet — wait
@@ -70,21 +91,19 @@ function RootStack() {
 
   const isAuthed = !!currentUser || isGuest;
   const needsOnboarding = !!currentUser && !isGuest && profile == null;
-  const simpleMode = readSimpleMode(profile?.accessibilitySettings);
-  // Caregivers (support persons) land on their own dashboard — the list of
-  // people they support — rather than the patient Home. Role is derived from
-  // the real profile, so there is no manual "role chooser" screen.
-  const isCaregiver = profile?.role === 'SUPPORT_PERSON';
-  const mainInitialRoute = isCaregiver
-    ? 'CaregiverHome'
-    : simpleMode
-      ? 'AllTasks'
-      : 'Home';
 
   return (
     <Stack.Navigator
       screenOptions={{ headerShown: false }}
-      initialRouteName={mainInitialRoute}
+      initialRouteName={
+        // Caregivers land on their own dashboard (list of linked primary users);
+        // role comes from the real profile, so there is no manual role chooser.
+        profile?.role === 'SUPPORT_PERSON'
+          ? 'CaregiverHome'
+          : interfaceSettings.simpleMode
+            ? startingPageRouteName(interfaceSettings.startingPage)
+            : 'Home'
+      }
     >
       {!isAuthed ? (
         <>
@@ -104,7 +123,13 @@ function RootStack() {
           <Stack.Screen name="Home" component={HomeScreen} />
           <Stack.Screen name="CaregiverHome" component={CaregiverHomeScreen} />
           <Stack.Screen name="PatientOverview" component={PatientOverviewScreen} />
+          <Stack.Screen name="Calendar" component={CalendarScreen} />
           <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen name="Interface" component={InterfaceSettingsScreen} />
+          <Stack.Screen name="Notifications" component={NotificationsSettingsScreen} />
+          <Stack.Screen name="AudioSpeech" component={AudioSpeechSettingsScreen} />
+          <Stack.Screen name="Statistics" component={StatisticsSettingsScreen} />
+          <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicySettingsScreen} />
           <Stack.Screen name="Categories" component={CategoriesScreen} />
           <Stack.Screen name="AllTasks" component={AllTasksScreen} />
           <Stack.Screen name="ManageTasks" component={ManageTasksScreen} />
@@ -117,6 +142,10 @@ function RootStack() {
           />
           <Stack.Screen name="CreateTaskStep" component={CreateTaskStepScreen} />
           <Stack.Screen name="ReorderSteps" component={ReorderStepsScreen} />
+          <Stack.Screen name="SelectTask" component={SelectTaskScreen} />
+          <Stack.Screen name="ScheduleAssignment" component={ScheduleAssignmentScreen} />
+          <Stack.Screen name="OccurrenceDetail" component={OccurrenceDetailScreen} />
+          <Stack.Screen name="StepDetail" component={StepDetailScreen} />
           <Stack.Screen name="ReportPeople" component={SelectPersonScreen} />
           <Stack.Screen name="Reports" component={ReportsScreen} />
           <Stack.Screen name="ReportView" component={ReportViewScreen} />
@@ -139,8 +168,9 @@ export default function App() {
     <GestureHandlerRootView style={styles.gestureRoot}>
       <AppProviders>
         <SafeAreaProvider>
-          <NavigationContainer>
+          <NavigationContainer ref={navigationRef}>
             <RootStack />
+            <TaskReminderManager />
           </NavigationContainer>
           <StatusBar style="dark" />
         </SafeAreaProvider>

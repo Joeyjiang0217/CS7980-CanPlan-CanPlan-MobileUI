@@ -2,22 +2,38 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useMyCategories } from '../../features/categories/hooks/useCategories';
 import { useSimpleMode } from '../../features/users/hooks/useSimpleMode';
-import { useTasksByCategory, useTasksByOwner } from '../../features/tasks/hooks/useTaskApi';
+import { useSettingsTapGate } from '../../shared/hooks/useSettingsTapGate';
+import {
+  useDeleteTask,
+  useTasksByCategory,
+  useTasksByOwner,
+} from '../../features/tasks/hooks/useTaskApi';
 import type { MainStackParamList } from '../../navigation/types';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
+import type { Task } from '../../shared/api/canplanTypes';
 import BackButton from '../../shared/components/BackButton';
+import ConfirmDialog from '../../shared/components/ConfirmDialog';
 import TaskListItem from '../../shared/components/TaskListItem';
 import { colors, radius, shadow, spacing, typography } from '../../shared/theme/tokens';
 
 type AllTasksNavigation = NativeStackNavigationProp<MainStackParamList, 'AllTasks'>;
 type AllTasksRoute = RouteProp<MainStackParamList, 'AllTasks'>;
 
-const SETTINGS_MULTI_TAP_TIMEOUT_MS = 1500;
 
 export default function AllTasksScreen() {
   const navigation = useNavigation<AllTasksNavigation>();
@@ -31,31 +47,24 @@ export default function AllTasksScreen() {
   const categoryName = route.params?.categoryName;
   const categoryMode = Boolean(categoryId);
 
-  // Caregiver delegated view: a linked primary user's tasks, read-only.
-  const managedOwnerId = route.params?.ownerId;
-  const managingName = route.params?.managingName;
-  const managed = Boolean(managedOwnerId);
-  // The caregiver's own Simple Mode must not shape a delegated patient view.
-  const showSimple = simpleMode && !managed;
-
-  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
+  const [ownerId, setOwnerId] = useState('');
   const [identityError, setIdentityError] = useState<string>();
-  const [settingsTapCount, setSettingsTapCount] = useState(0);
-  const settingsTapResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // "+" popover menu (Add a task / Edit) and the inline edit mode it opens:
+  // cards shift right behind a red delete badge, and tapping a card jumps
+  // straight to the task editor.
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
+  const deleteTaskMutation = useDeleteTask();
+  const openSettings = useCallback(() => navigation.navigate('Settings'), [navigation]);
+  const { handleSettingsTap, settingsHint } = useSettingsTapGate(openSettings);
   // Only one of these queries is enabled at a time (the other gets an empty id).
   const ownerTasksQuery = useTasksByOwner(categoryMode ? '' : ownerId);
   const categoryTasksQuery = useTasksByCategory(ownerId, categoryId ?? '');
   const tasksQuery = categoryMode ? categoryTasksQuery : ownerTasksQuery;
-  const categoriesQuery = useMyCategories(Boolean(ownerId), 50, managedOwnerId);
+  const categoriesQuery = useMyCategories(Boolean(ownerId), 50, ownerId);
 
   useEffect(() => {
-    // In managed mode the owner is the primary user from the route — don't
-    // overwrite it with the signed-in caregiver's own id.
-    if (managedOwnerId) {
-      setOwnerId(managedOwnerId);
-      return;
-    }
-
     let mounted = true;
 
     void getCurrentUserId()
@@ -75,7 +84,7 @@ export default function AllTasksScreen() {
     return () => {
       mounted = false;
     };
-  }, [managedOwnerId]);
+  }, []);
 
   const tasks = useMemo(
     () => tasksQuery.data?.pages.flatMap((page) => page.items) ?? [],
@@ -97,42 +106,43 @@ export default function AllTasksScreen() {
     ? categoryById.get(categoryId)?.color ?? undefined
     : undefined;
 
-  const clearSettingsTapTimeout = useCallback(() => {
-    if (settingsTapResetTimeoutRef.current) {
-      clearTimeout(settingsTapResetTimeoutRef.current);
-      settingsTapResetTimeoutRef.current = null;
-    }
-  }, []);
+  // Drives the edit-mode transition: the delete-badge column animates its
+  // width 0 → full, which slides the cards right (and back on exit, after
+  // which the badges unmount).
+  const editAnim = useRef(new Animated.Value(0)).current;
+  const toggleEditMode = useCallback(
+    (enabled: boolean) => {
+      if (enabled) {
+        setEditMode(true);
+      }
+      Animated.timing(editAnim, {
+        toValue: enabled ? 1 : 0,
+        duration: 220,
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (!enabled && finished) {
+          setEditMode(false);
+        }
+      });
+    },
+    [editAnim],
+  );
 
-  const resetSettingsTapState = useCallback(() => {
-    clearSettingsTapTimeout();
-    setSettingsTapCount(0);
-  }, [clearSettingsTapTimeout]);
-
-  useEffect(() => resetSettingsTapState, [resetSettingsTapState]);
-
-  const handleSettingsPress = useCallback(() => {
-    const nextTapCount = settingsTapCount + 1;
-
-    if (nextTapCount >= 3) {
-      resetSettingsTapState();
-      navigation.navigate('Settings');
+  const confirmDeleteTask = useCallback(async () => {
+    if (!taskToDelete || deleteTaskMutation.isPending) {
       return;
     }
-
-    setSettingsTapCount(nextTapCount);
-    clearSettingsTapTimeout();
-    settingsTapResetTimeoutRef.current = setTimeout(() => {
-      setSettingsTapCount(0);
-      settingsTapResetTimeoutRef.current = null;
-    }, SETTINGS_MULTI_TAP_TIMEOUT_MS);
-  }, [clearSettingsTapTimeout, navigation, resetSettingsTapState, settingsTapCount]);
-
-  const simpleModeHeaderMessage = useMemo(() => {
-    if (settingsTapCount === 1) return 'Tap 2 times for settings';
-    if (settingsTapCount === 2) return 'Tap 1 time for settings';
-    return 'All Tasks';
-  }, [settingsTapCount]);
+    try {
+      await deleteTaskMutation.mutateAsync(taskToDelete.taskId);
+      setTaskToDelete(null);
+    } catch (err) {
+      setTaskToDelete(null);
+      Alert.alert(
+        'Could not delete this task',
+        err instanceof Error ? err.message : 'Please try again.',
+      );
+    }
+  }, [taskToDelete, deleteTaskMutation]);
 
   return (
     <View style={styles.root}>
@@ -146,7 +156,7 @@ export default function AllTasksScreen() {
       >
         {/* Category view and normal mode show Back; Simple Mode root has none. */}
         <View style={styles.headerSide}>
-          {categoryMode || managed || !showSimple ? (
+          {categoryMode || !simpleMode ? (
             <BackButton onPress={() => navigation.goBack()} variant="dark" />
           ) : (
             <View style={styles.headerPlaceholder} />
@@ -164,10 +174,10 @@ export default function AllTasksScreen() {
                 {categoryName ?? 'Tasks'}
               </Text>
             </View>
-          ) : showSimple && settingsTapCount > 0 ? (
+          ) : simpleMode && settingsHint ? (
             <View style={styles.headerPrompt}>
               <Text accessibilityRole="header" style={styles.headerPromptText} numberOfLines={1}>
-                {simpleModeHeaderMessage}
+                {settingsHint}
               </Text>
             </View>
           ) : (
@@ -180,28 +190,26 @@ export default function AllTasksScreen() {
           style={[
             styles.headerSide,
             styles.headerSideRight,
-            !categoryMode && !managed && !showSimple ? styles.headerSideWide : null,
+            !categoryMode && !simpleMode ? styles.headerSideWide : null,
           ]}
         >
-          {categoryMode ? null : managed ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Add a task"
-              onPress={() =>
-                navigation.navigate('CreateTask', { ownerId: managedOwnerId, managingName })
-              }
-              style={({ pressed }) => [styles.headerIconButton, pressed ? styles.pressed : null]}
-            >
-              <Ionicons name="add" size={24} color={colors.text} />
-            </Pressable>
-          ) : showSimple ? (
+          {categoryMode ? null : simpleMode ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Settings"
-              onPress={handleSettingsPress}
+              onPress={handleSettingsTap}
               style={({ pressed }) => [styles.headerIconButton, pressed ? styles.pressed : null]}
             >
               <Ionicons name="settings-outline" size={22} color={colors.text} />
+            </Pressable>
+          ) : editMode ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Finish editing"
+              onPress={() => toggleEditMode(false)}
+              style={({ pressed }) => [styles.headerDoneButton, pressed ? styles.pressed : null]}
+            >
+              <Text style={styles.headerDoneText}>Done</Text>
             </Pressable>
           ) : (
             <View style={styles.headerActions}>
@@ -215,8 +223,8 @@ export default function AllTasksScreen() {
               </Pressable>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Add a task"
-                onPress={() => navigation.navigate('CreateTask')}
+                accessibilityLabel="Open task actions"
+                onPress={() => setMenuVisible(true)}
                 style={({ pressed }) => [styles.headerIconButton, pressed ? styles.pressed : null]}
               >
                 <Ionicons name="add" size={24} color={colors.text} />
@@ -225,15 +233,6 @@ export default function AllTasksScreen() {
           )}
         </View>
       </View>
-
-      {managed ? (
-        <View style={styles.banner}>
-          <Ionicons name="people" size={16} color={colors.primary} />
-          <Text style={styles.bannerText} numberOfLines={1}>
-            Managing {managingName ?? 'this person'}
-          </Text>
-        </View>
-      ) : null}
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xxl }]}
@@ -263,12 +262,43 @@ export default function AllTasksScreen() {
 
         <View style={styles.taskList}>
           {tasks.map((task) => (
-            <TaskListItem
-              key={task.taskId}
-              task={task}
-              category={task.categoryId ? categoryById.get(task.categoryId) : undefined}
-              onPress={() => navigation.navigate('TaskView', { taskId: task.taskId })}
-            />
+            <View key={task.taskId} style={styles.taskRow}>
+              {editMode ? (
+                <Animated.View
+                  style={[
+                    styles.deleteBadgeWrap,
+                    {
+                      width: editAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, 28 + spacing.md],
+                      }),
+                      opacity: editAnim,
+                    },
+                  ]}
+                >
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${task.title}`}
+                    onPress={() => setTaskToDelete(task)}
+                    hitSlop={8}
+                    style={({ pressed }) => [styles.deleteBadge, pressed ? styles.pressed : null]}
+                  >
+                    <Ionicons name="remove" size={20} color={colors.onPrimary} />
+                  </Pressable>
+                </Animated.View>
+              ) : null}
+              <View style={styles.taskRowItem}>
+                <TaskListItem
+                  task={task}
+                  category={task.categoryId ? categoryById.get(task.categoryId) : undefined}
+                  onPress={() =>
+                    editMode
+                      ? navigation.navigate('CreateTask', { taskId: task.taskId })
+                      : navigation.navigate('TaskView', { taskId: task.taskId })
+                  }
+                />
+              </View>
+            </View>
           ))}
         </View>
 
@@ -291,17 +321,17 @@ export default function AllTasksScreen() {
           </Pressable>
         ) : null}
 
-        {categoryMode || !showSimple || managed ? (
+        {!simpleMode ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add a task"
             onPress={() =>
-              navigation.navigate('CreateTask', {
-                ...(categoryMode
+              navigation.navigate(
+                'CreateTask',
+                categoryMode
                   ? { fixedCategoryId: categoryId, fixedCategoryName: categoryName }
-                  : {}),
-                ...(managed ? { ownerId: managedOwnerId, managingName } : {}),
-              })
+                  : undefined,
+              )
             }
             style={({ pressed }) => [styles.addTaskButton, pressed ? styles.addTaskButtonPressed : null]}
           >
@@ -310,6 +340,63 @@ export default function AllTasksScreen() {
           </Pressable>
         ) : null}
       </ScrollView>
+
+      {/* "+" popover: anchored under the header button, WeChat-style. */}
+      <Modal
+        visible={menuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <Pressable style={styles.menuBackdrop} onPress={() => setMenuVisible(false)}>
+          {/* Outer layer carries the shadow; the inner card clips its children
+              (pressed-row backgrounds) to the rounded corners. */}
+          <View style={[styles.menuCardShadow, { top: insets.top + spacing.sm + 44 + spacing.xs }]}>
+            <View style={styles.menuCard}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add a task"
+              onPress={() => {
+                setMenuVisible(false);
+                navigation.navigate('CreateTask');
+              }}
+              style={({ pressed }) => [styles.menuItem, pressed ? styles.menuItemPressed : null]}
+            >
+              <Ionicons name="add-circle-outline" size={22} color={colors.text} />
+              <Text style={styles.menuItemText}>Add a task</Text>
+            </Pressable>
+            <View style={styles.menuDivider} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Edit tasks"
+              onPress={() => {
+                setMenuVisible(false);
+                toggleEditMode(true);
+              }}
+              style={({ pressed }) => [styles.menuItem, pressed ? styles.menuItemPressed : null]}
+            >
+              <Ionicons name="create-outline" size={22} color={colors.text} />
+              <Text style={styles.menuItemText}>Edit</Text>
+            </Pressable>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <ConfirmDialog
+        visible={taskToDelete !== null}
+        title="Delete 1 task?"
+        message="These tasks and their steps cannot be restored."
+        confirmLabel={deleteTaskMutation.isPending ? 'Deleting…' : 'Delete'}
+        cancelLabel="Cancel"
+        destructive
+        onConfirm={() => void confirmDeleteTask()}
+        onCancel={() => {
+          if (!deleteTaskMutation.isPending) {
+            setTaskToDelete(null);
+          }
+        }}
+      />
     </View>
   );
 }
@@ -390,21 +477,55 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.surfaceWarm,
   },
-  banner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginHorizontal: spacing.xl,
-    marginBottom: spacing.md,
-    paddingVertical: spacing.sm,
+  headerDoneButton: {
+    minHeight: 44,
     paddingHorizontal: spacing.lg,
     borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: colors.surfaceWarm,
   },
-  bannerText: {
+  headerDoneText: {
+    ...typography.bodyStrong,
+    color: colors.primary,
+  },
+  // "+" popover menu, anchored under the header's right-side buttons.
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 14, 6, 0.15)',
+  },
+  menuCardShadow: {
+    position: 'absolute',
+    right: spacing.xl,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    ...shadow.card,
+  },
+  menuCard: {
+    minWidth: 200,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.surface,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  menuItemPressed: {
+    backgroundColor: colors.surfaceWarm,
+  },
+  menuItemText: {
     ...typography.bodyStrong,
     color: colors.text,
-    flexShrink: 1,
+  },
+  menuDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginHorizontal: spacing.lg,
   },
   content: {
     paddingHorizontal: spacing.xl,
@@ -454,6 +575,28 @@ const styles = StyleSheet.create({
   },
   taskList: {
     gap: spacing.lg,
+  },
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  taskRowItem: {
+    flex: 1,
+  },
+  // Animated column hosting the delete badge; its width growing from 0 is
+  // what slides the card to the right.
+  deleteBadgeWrap: {
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  // iOS-style red delete badge shown to the left of each card in edit mode.
+  deleteBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.danger,
   },
   loadMoreButton: {
     minHeight: 48,
