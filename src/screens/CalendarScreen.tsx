@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -72,6 +72,7 @@ import { queryKeys } from '../shared/query/queryKeys';
 import { colors, radius, shadow, spacing, typography } from '../shared/theme/tokens';
 
 type CalendarNavigation = NativeStackNavigationProp<MainStackParamList, 'Calendar'>;
+type CalendarRoute = RouteProp<MainStackParamList, 'Calendar'>;
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -1767,18 +1768,33 @@ const MemoDayAssignmentsPage = memo(DayAssignmentsPage);
 
 export default function CalendarScreen() {
   const navigation = useNavigation<CalendarNavigation>();
+  const route = useRoute<CalendarRoute>();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
 
-  const [ownerId, setOwnerId] = useState('');
+  // Caregiver delegated view: a linked primary user's calendar, opened from the
+  // patient overview. The caregiver's own Simple Mode / launch simplifications
+  // must not shape a delegated view (see effective settings below).
+  const managedOwnerId = route.params?.ownerId;
+  const managingName = route.params?.managingName;
+  const managed = Boolean(managedOwnerId);
+
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [selected, setSelected] = useState(() => new Date());
   const [visualSelected, setVisualSelected] = useState(() => new Date());
-  const [activeStatus, setActiveStatus] = useState<StatusKey>(initialCalendarTab);
+  const [activeStatus, setActiveStatus] = useState<StatusKey>(() =>
+    managed ? 'todo' : initialCalendarTab(),
+  );
   const [monthPickerVisible, setMonthPickerVisible] = useState(false);
   const [addChoiceVisible, setAddChoiceVisible] = useState(false);
   const [pagerHeight, setPagerHeight] = useState(0);
 
   useEffect(() => {
+    // Managed mode: the owner is the primary user from the route.
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
     void getCurrentUserId().then((id) => {
       if (mounted) {
@@ -1788,12 +1804,16 @@ export default function CalendarScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   const today = useToday();
   const selectedISO = toISODate(selected);
-  const { allowChangingDate, simpleMode, startingPage, showOverdue, onlyToday } =
-    useInterfaceSettings();
+  const settings = useInterfaceSettings();
+  const { startingPage, showOverdue, onlyToday } = settings;
+  // A delegated calendar always runs as the full, date-navigable calendar; the
+  // caregiver's own Simple Mode / date-lock never applies to another person.
+  const simpleMode = settings.simpleMode && !managed;
+  const allowChangingDate = managed ? true : settings.allowChangingDate;
 
   // Show Overdue on Launch data scope: the locked Simple Mode calendar's
   // Overdue tab also carries the past week's unresolved occurrences. Only
@@ -2068,6 +2088,8 @@ export default function CalendarScreen() {
           scheduledTime: view.scheduledTime,
           status,
           isVirtual: view.isVirtual && !instanceId,
+          ownerId: managedOwnerId,
+          managingName,
         });
       } else {
         navigation.navigate('TaskView', {
@@ -2078,10 +2100,12 @@ export default function CalendarScreen() {
           scheduledFor: view.scheduledFor,
           instanceId,
           status,
+          ownerId: managedOwnerId,
+          managingName,
         });
       }
     },
-    [navigation, today, instanceIdOverrides, statusOverrides],
+    [navigation, today, instanceIdOverrides, statusOverrides, managedOwnerId, managingName],
   );
 
   const weekStart = useMemo(() => startOfWeek(visualSelected), [visualSelected]);
@@ -2150,6 +2174,12 @@ export default function CalendarScreen() {
             </Pressable>
           )}
         </View>
+
+        {managed && managingName ? (
+          <Text style={styles.managingBanner} numberOfLines={1}>
+            Managing {managingName}
+          </Text>
+        ) : null}
 
         {!allowChangingDate ? (
           <Text
@@ -2325,7 +2355,7 @@ export default function CalendarScreen() {
               accessibilityLabel="Choose an existing task"
               onPress={() => {
                 setAddChoiceVisible(false);
-                navigation.navigate('SelectTask');
+                navigation.navigate('SelectTask', { ownerId: managedOwnerId, managingName });
               }}
               style={({ pressed }) => [styles.choiceButton, pressed ? styles.choiceButtonPressed : null]}
             >
@@ -2337,7 +2367,11 @@ export default function CalendarScreen() {
               accessibilityLabel="Start from scratch"
               onPress={() => {
                 setAddChoiceVisible(false);
-                navigation.navigate('CreateTask', { scheduleAfterCreate: true });
+                navigation.navigate('CreateTask', {
+                  scheduleAfterCreate: true,
+                  ownerId: managedOwnerId,
+                  managingName,
+                });
               }}
               style={({ pressed }) => [styles.choiceButton, pressed ? styles.choiceButtonPressed : null]}
             >
@@ -2371,6 +2405,13 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   headerTitleCentered: {
+    textAlign: 'center',
+  },
+  // Delegated context strip — mirrors the caregiver overview "Managing {name}".
+  managingBanner: {
+    marginTop: spacing.sm,
+    ...typography.bodyStrong,
+    color: colors.text,
     textAlign: 'center',
   },
   // 3-tap settings hint — same look as the simple All Tasks header prompt.

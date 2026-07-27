@@ -129,11 +129,13 @@ export default function PatientOverviewScreen() {
               navigation.navigate('Categories', { ownerId: userId, managingName: displayName })
             }
           />
-          {/* The calendar view arrives with the scheduling screens from main. */}
           <SectionCard
             icon="calendar-outline"
             title="Calendar"
-            subtitle="Not available yet"
+            subtitle="View and schedule this person's tasks by date"
+            onPress={() =>
+              navigation.navigate('Calendar', { ownerId: userId, managingName: displayName })
+            }
           />
         </View>
       </ScrollView>

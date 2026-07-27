@@ -522,6 +522,8 @@ export default function TaskViewScreen() {
   const insets = useSafeAreaInsets();
   const simpleMode = useSimpleMode();
   const { taskId, assignmentId, scheduledDate, scheduledTime, scheduledFor } = route.params;
+  // Caregiver delegated: run the occurrence against a linked primary user.
+  const managedOwnerId = route.params.ownerId;
 
   // Instance "runner" mode: opened from a calendar occurrence, so steps can be
   // checked off and a progress bar is shown.
@@ -556,7 +558,7 @@ export default function TaskViewScreen() {
   // is materialized (startTaskInstance) and then given its final status. That
   // backend status is what drives the calendar (Done/Skipped bucket), the
   // "earliest-uncompleted = active" highlight, and the delete rules.
-  const [ownerId, setOwnerId] = useState('');
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [instanceId, setInstanceId] = useState<string | undefined>(route.params.instanceId);
   const [finishError, setFinishError] = useState<string>();
   const startInstance = useStartTaskInstance();
@@ -569,6 +571,10 @@ export default function TaskViewScreen() {
     startInstance.isPending || updateStatus.isPending || setStepCompletion.isPending;
 
   useEffect(() => {
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
     void getCurrentUserId().then((id) => {
       if (mounted) {
@@ -578,7 +584,7 @@ export default function TaskViewScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   // Cloud-first step completion: the materialized instance's step snapshots are
   // the source of truth; an optimistic overlay keeps taps instant while each
@@ -1023,6 +1029,8 @@ export default function TaskViewScreen() {
                 scheduledTime: scheduledTime as string,
                 status: 'TO_DO',
                 isVirtual: !instanceId,
+                ownerId: managedOwnerId,
+                managingName: route.params.managingName,
               })
             }
             style={({ pressed }) => [styles.menuButton, pressed ? styles.pressed : null]}
@@ -1142,6 +1150,8 @@ export default function TaskViewScreen() {
                             scheduledTime,
                             instanceId,
                             status: occStatus,
+                            ownerId: managedOwnerId,
+                            managingName: route.params.managingName,
                           }
                         : {}),
                     })

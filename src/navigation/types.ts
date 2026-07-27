@@ -83,6 +83,9 @@ export type MainStackParamList = {
     status?: TaskInstanceStatus;
     /** Set by the step player as it pages, so the list re-centres on return. */
     focusStepId?: string;
+    /** Caregiver delegated: run against a linked primary user's occurrence. */
+    ownerId?: string;
+    managingName?: string;
   };
   TaskDetail: { taskId: string };
   /** Single-step focus view. Occurrence fields enable the done/undo toggle. */
@@ -96,6 +99,9 @@ export type MainStackParamList = {
     instanceId?: string;
     /** Occurrence status — completed/skipped render the step read-only. */
     status?: TaskInstanceStatus;
+    /** Caregiver delegated: the occurrence belongs to a linked primary user. */
+    ownerId?: string;
+    managingName?: string;
   };
   /**
    * `fixedCategoryId` pins the new task to one category and hides the category
@@ -119,10 +125,21 @@ export type MainStackParamList = {
     | undefined;
   CreateTaskStep: { taskId: string; stepId?: string };
   ReorderSteps: { taskId: string };
-  /** Pick an existing task to schedule onto the calendar. */
-  SelectTask: undefined;
-  /** Create a TaskAssignment (date/time/repeat) for an existing task. */
-  ScheduleAssignment: { taskId: string; taskTitle?: string };
+  /**
+   * Pick an existing task to schedule onto the calendar. With `ownerId`
+   * (caregiver delegated): pick from a linked primary user's tasks.
+   */
+  SelectTask: { ownerId?: string; managingName?: string } | undefined;
+  /**
+   * Create a TaskAssignment (date/time/repeat) for an existing task. With
+   * `ownerId` (caregiver delegated): schedule under a linked primary user.
+   */
+  ScheduleAssignment: {
+    taskId: string;
+    taskTitle?: string;
+    ownerId?: string;
+    managingName?: string;
+  };
   /** One occurrence (from the calendar feed) — view details and delete. */
   OccurrenceDetail: {
     assignmentId: string;
@@ -132,6 +149,9 @@ export type MainStackParamList = {
     scheduledTime: string;
     status: TaskInstanceStatus;
     isVirtual: boolean;
+    /** Caregiver delegated: the occurrence belongs to a linked primary user. */
+    ownerId?: string;
+    managingName?: string;
   };
   /** Supporter-only: pick which cared-for user's reports to view. */
   ReportPeople: undefined;
