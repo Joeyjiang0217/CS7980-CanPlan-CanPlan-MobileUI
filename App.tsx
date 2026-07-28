@@ -71,7 +71,14 @@ function RootStack() {
   const { isGuest } = useSession();
   // Only fetch the profile when a real user is signed in — in guest mode
   // there is no Cognito identity to query.
-  const { data: profile, isLoading: profileLoading } = useMyProfile({
+  // `isPending` (not `isLoading`) is intentional: isLoading is
+  // `isPending && isFetching`, which briefly goes false in the render where
+  // this query flips from disabled → enabled (currentUser just resolved) but
+  // the fetch hasn't started, so `profile` is still undefined. Gating on that
+  // would mount the navigator — and capture `initialRouteName` — off a
+  // not-yet-loaded profile, landing a SUPPORT_PERSON on Home instead of
+  // CaregiverHome. `isPending` stays true until the profile actually resolves.
+  const { data: profile, isPending: profilePending } = useMyProfile({
     enabled: !!currentUser && !isGuest,
   });
   // Simple Mode + starting page come from the locally persisted interface
@@ -84,8 +91,10 @@ function RootStack() {
     return <Splash />;
   }
   // Real user signed in but the profile fetch hasn't completed yet — wait
-  // so we don't briefly flash the Onboarding screen for existing users.
-  if (currentUser && !isGuest && profileLoading) {
+  // so we don't briefly flash the Onboarding screen for existing users, and
+  // so the navigator's initialRouteName is computed from a resolved profile
+  // (see the isPending note above).
+  if (currentUser && !isGuest && profilePending) {
     return <Splash />;
   }
 
