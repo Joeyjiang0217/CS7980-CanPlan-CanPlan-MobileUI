@@ -343,10 +343,14 @@ export default function ScheduleAssignmentScreen() {
   const route = useRoute<ScheduleAssignmentRoute>();
   const insets = useSafeAreaInsets();
   const { taskId, taskTitle } = route.params;
+  // Caregiver delegated: schedule under a linked primary user.
+  const managedOwnerId = route.params.ownerId;
+  const managingName = route.params.managingName;
+  const managed = Boolean(managedOwnerId);
 
   const createAssignment = useCreateAssignment();
 
-  const [ownerId, setOwnerId] = useState('');
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [date, setDate] = useState(() => startOfDay(new Date()));
   const [time, setTime] = useState<string>();
   const [repeat, setRepeat] = useState<RepeatValue>('NONE');
@@ -354,6 +358,10 @@ export default function ScheduleAssignmentScreen() {
   const [inlineError, setInlineError] = useState<string>();
 
   useEffect(() => {
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
     void getCurrentUserId().then((id) => {
       if (mounted) {
@@ -363,7 +371,7 @@ export default function ScheduleAssignmentScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   const dateLabel = date.toLocaleDateString('en-US', {
     weekday: 'short',
@@ -426,7 +434,21 @@ export default function ScheduleAssignmentScreen() {
 
     createAssignment.mutate(input, {
       onSuccess: () => {
-        navigation.reset({ index: 1, routes: [{ name: 'Home' }, { name: 'Calendar' }] });
+        // Reset to a clean stack so Back doesn't land on the now-stale
+        // Select/Create step. Delegated: rebuild the caregiver chain so Back
+        // returns through the patient overview, not the caregiver's own Home.
+        if (managed && managedOwnerId) {
+          navigation.reset({
+            index: 2,
+            routes: [
+              { name: 'CaregiverHome' },
+              { name: 'PatientOverview', params: { userId: managedOwnerId, displayName: managingName ?? '' } },
+              { name: 'Calendar', params: { ownerId: managedOwnerId, managingName } },
+            ],
+          });
+        } else {
+          navigation.reset({ index: 1, routes: [{ name: 'Home' }, { name: 'Calendar' }] });
+        }
       },
       onError: (error) => setInlineError(errorMessage(error)),
     });
@@ -457,6 +479,12 @@ export default function ScheduleAssignmentScreen() {
           )}
         </Pressable>
       </View>
+
+      {managed && managingName ? (
+        <Text style={styles.managingBanner} numberOfLines={1}>
+          Managing {managingName}
+        </Text>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xxl }]}
@@ -552,6 +580,14 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.md,
     ...typography.title,
     color: colors.text,
+  },
+  // Delegated context strip — mirrors the caregiver overview "Managing {name}".
+  managingBanner: {
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.sm,
+    ...typography.bodyStrong,
+    color: colors.text,
+    textAlign: 'center',
   },
   headerAction: {
     minWidth: 56,

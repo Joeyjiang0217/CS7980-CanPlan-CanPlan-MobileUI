@@ -11,6 +11,7 @@ export function listReports(userId: string, page?: PageInput) {
   return canPlanApi.listReports(userId, page);
 }
 
+/** Generate and persist a report in one call; returns the saved Report. */
 export function generateReport(input: GenerateReportInput): Promise<Report> {
   return canPlanApi.generateReport(input);
 }

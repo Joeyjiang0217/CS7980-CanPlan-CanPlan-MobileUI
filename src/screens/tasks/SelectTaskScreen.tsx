@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -14,17 +14,28 @@ import TaskListItem from '../../shared/components/TaskListItem';
 import { colors, radius, shadow, spacing, typography } from '../../shared/theme/tokens';
 
 type SelectTaskNavigation = NativeStackNavigationProp<MainStackParamList, 'SelectTask'>;
+type SelectTaskRoute = RouteProp<MainStackParamList, 'SelectTask'>;
 
 export default function SelectTaskScreen() {
   const navigation = useNavigation<SelectTaskNavigation>();
+  const route = useRoute<SelectTaskRoute>();
   const insets = useSafeAreaInsets();
 
-  const [ownerId, setOwnerId] = useState('');
+  // Caregiver delegated: pick from a linked primary user's tasks.
+  const managedOwnerId = route.params?.ownerId;
+  const managingName = route.params?.managingName;
+  const managed = Boolean(managedOwnerId);
+
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [identityError, setIdentityError] = useState<string>();
   const tasksQuery = useTasksByOwner(ownerId);
   const categoriesQuery = useMyCategories(Boolean(ownerId), 50, ownerId);
 
   useEffect(() => {
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
     void getCurrentUserId()
       .then((id) => {
@@ -42,7 +53,7 @@ export default function SelectTaskScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   const tasks = useMemo(
     () => tasksQuery.data?.pages.flatMap((page) => page.items) ?? [],
@@ -68,6 +79,12 @@ export default function SelectTaskScreen() {
           Select task
         </Text>
       </View>
+
+      {managed && managingName ? (
+        <Text style={styles.managingBanner} numberOfLines={1}>
+          Managing {managingName}
+        </Text>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xxl }]}
@@ -105,6 +122,8 @@ export default function SelectTaskScreen() {
                 navigation.navigate('ScheduleAssignment', {
                   taskId: task.taskId,
                   taskTitle: task.title,
+                  ownerId: managedOwnerId,
+                  managingName,
                 })
               }
             />
@@ -150,6 +169,14 @@ const styles = StyleSheet.create({
     marginLeft: spacing.md,
     ...typography.title,
     color: colors.text,
+  },
+  // Delegated context strip — mirrors the caregiver overview "Managing {name}".
+  managingBanner: {
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.sm,
+    ...typography.bodyStrong,
+    color: colors.text,
+    textAlign: 'center',
   },
   content: {
     paddingHorizontal: spacing.xl,

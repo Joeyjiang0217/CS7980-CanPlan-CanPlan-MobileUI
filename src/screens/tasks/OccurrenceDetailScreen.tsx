@@ -64,8 +64,12 @@ export default function OccurrenceDetailScreen() {
   const route = useRoute<OccurrenceDetailRoute>();
   const insets = useSafeAreaInsets();
   const { assignmentId, taskTitle, scheduledDate, scheduledTime, status: paramStatus } = route.params;
+  // Caregiver delegated: this occurrence belongs to a linked primary user.
+  const managedOwnerId = route.params.ownerId;
+  const managingName = route.params.managingName;
+  const managed = Boolean(managedOwnerId);
 
-  const [ownerId, setOwnerId] = useState('');
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [inlineError, setInlineError] = useState<string>();
 
@@ -76,6 +80,10 @@ export default function OccurrenceDetailScreen() {
     cancelInstance.isPending || endAssignment.isPending || deleteAssignment.isPending;
 
   useEffect(() => {
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
     void getCurrentUserId().then((id) => {
       if (mounted) {
@@ -85,7 +93,7 @@ export default function OccurrenceDetailScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   const assignmentsQuery = useAssignmentsForUser(ownerId);
   const assignment = useMemo(
@@ -185,7 +193,10 @@ export default function OccurrenceDetailScreen() {
   // After a delete, jump back to the calendar (this screen may have been
   // reached via the runner, so a single goBack would land on the now-stale
   // runner instead of the calendar).
-  const leaveOnSuccess = { onSuccess: () => navigation.navigate('Calendar') };
+  const leaveOnSuccess = {
+    onSuccess: () =>
+      navigation.navigate('Calendar', { ownerId: managedOwnerId, managingName }),
+  };
   const onError = (error: Error) => setInlineError(error.message);
 
   const handleDeleteThis = () => {
@@ -220,6 +231,12 @@ export default function OccurrenceDetailScreen() {
           {taskTitle}
         </Text>
       </View>
+
+      {managed && managingName ? (
+        <Text style={styles.managingBanner} numberOfLines={1}>
+          Managing {managingName}
+        </Text>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xxl }]}
@@ -397,6 +414,14 @@ const styles = StyleSheet.create({
     marginLeft: spacing.md,
     ...typography.title,
     color: colors.text,
+  },
+  // Delegated context strip — mirrors the caregiver overview "Managing {name}".
+  managingBanner: {
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.sm,
+    ...typography.bodyStrong,
+    color: colors.text,
+    textAlign: 'center',
   },
   content: {
     paddingHorizontal: spacing.xl,

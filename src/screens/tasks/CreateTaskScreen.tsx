@@ -235,6 +235,11 @@ export default function CreateTaskScreen() {
   const existingTaskId = route.params?.taskId;
   const fixedCategoryId = route.params?.fixedCategoryId;
   const fixedCategoryName = route.params?.fixedCategoryName;
+  // Caregiver delegated: create the new task under a linked primary user
+  // (editing an existing task derives the owner from the task itself).
+  const managedOwnerId = route.params?.ownerId;
+  const managingName = route.params?.managingName;
+  const managed = Boolean(managedOwnerId) && !existingTaskId;
   // Interface setting: with categories disabled the picker is replaced by a
   // hint; an existing categoryId is left untouched on save.
   const { useCategories } = useInterfaceSettings();
@@ -271,7 +276,7 @@ export default function CreateTaskScreen() {
   const [coverPreviewUri, setCoverPreviewUri] = useState<string>();
   const [coverNeedsUpload, setCoverNeedsUpload] = useState(false);
   const [steps, setSteps] = useState<DraftStep[]>([]);
-  const [categoryOwnerId, setCategoryOwnerId] = useState('');
+  const [categoryOwnerId, setCategoryOwnerId] = useState(managed ? (managedOwnerId ?? '') : '');
   // Pre-pin to the fixed category when creating from a category view.
   const [categoryId, setCategoryId] = useState<string | undefined>(fixedCategoryId);
   const [savedCategoryId, setSavedCategoryId] = useState<string>();
@@ -384,6 +389,11 @@ export default function CreateTaskScreen() {
   }, [coverImage, existingCoverQuery.data?.downloadUrl]);
 
   useEffect(() => {
+    // Delegated create: the owner is the linked primary user from the route.
+    if (managed && managedOwnerId) {
+      setCategoryOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
 
     void getCurrentUserId()
@@ -399,7 +409,7 @@ export default function CreateTaskScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managed, managedOwnerId]);
 
   const beginTaskOperation = (action: string) => {
     taskOperationRef.current = action;
@@ -426,6 +436,7 @@ export default function CreateTaskScreen() {
       const createdTask = await createTaskMutation.mutateAsync({
         title: taskTitle,
         ...(categoryId ? { categoryId } : {}),
+        ...(managed && managedOwnerId ? { userId: managedOwnerId } : {}),
       });
       if (!createdTask) {
         throw new Error('Task creation returned no task. Please try again.');
@@ -497,6 +508,8 @@ export default function CreateTaskScreen() {
         navigation.replace('ScheduleAssignment', {
           taskId,
           taskTitle: title.trim() || undefined,
+          ownerId: managedOwnerId,
+          managingName,
         });
       } else {
         navigation.goBack();
@@ -913,6 +926,12 @@ export default function CreateTaskScreen() {
           )}
         </Pressable>
       </View>
+
+      {managed && managingName ? (
+        <Text style={styles.managingBanner} numberOfLines={1}>
+          Managing {managingName}
+        </Text>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xxl }]}
@@ -1365,6 +1384,14 @@ const styles = StyleSheet.create({
     flex: 1,
     ...typography.display,
     color: colors.text,
+  },
+  // Delegated context strip — mirrors the caregiver overview "Managing {name}".
+  managingBanner: {
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.sm,
+    ...typography.bodyStrong,
+    color: colors.text,
+    textAlign: 'center',
   },
   saveButton: {
     minWidth: 104,

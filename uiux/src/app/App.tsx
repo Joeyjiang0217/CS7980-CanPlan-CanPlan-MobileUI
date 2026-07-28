@@ -3,6 +3,7 @@ import {
   ArrowLeft, Plus, Check, Play, Mic, Volume2, Square,
   ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
   Camera, X, Settings, Cloud, CloudDownload, Home, Eye, EyeOff,
+  Heart, UserPlus, Search, FileText, ClipboardList, SkipForward,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -31,9 +32,29 @@ const REPEAT_LABELS: Record<RepeatInterval, string> = {
 };
 
 type Screen =
+  | "welcome"
   | "login" | "signup" | "verify-email" | "signup-info" | "forgot-password"
+  | "caregiver-login" | "caregiver-forgot" | "caregiver-home"
+  | "caregiver-overview" | "caregiver-add-patient"
   | "home" | "all-tasks" | "categories" | "category-detail" | "calendar"
   | "task-detail" | "step-view" | "create" | "settings";
+
+type SessionRole = "patient" | "caregiver" | null;
+
+interface Patient {
+  id: string;
+  firstName: string;
+  lastName?: string;
+  avatarColor: string;     // reuse the category palette for the avatar circle
+}
+
+interface Caregiver {
+  id: string;
+  firstName: string;
+  lastName?: string;
+  relationship?: string;   // "Parent" | "Support worker" | ...
+  patientIds: string[];    // patients this caregiver can manage
+}
 
 interface AppSettings {
   notificationAlert: "none" | "15min" | "attime";
@@ -48,6 +69,7 @@ interface AppSettings {
   autoPlaySounds: boolean;
   speechSpeed: number;
   taskIconSize: number;
+  showCaregiverTags: boolean;   // caregiver portal: show the "Caregiver" chip on tasks
 }
 
 interface Step {
@@ -72,6 +94,8 @@ interface Task {
   category?: string;
   schedule?: Schedule;
   photoUrl?: string;
+  caregiverEdited?: boolean;   // added/edited by a caregiver — flagged for the patient
+  skipped?: boolean;           // task skipped for now (shows in the Calendar "Skipped" tab)
 }
 
 interface DraftStep {
@@ -136,6 +160,81 @@ const INITIAL_TASKS: Task[] = [
   },
 ];
 
+// ── Caregiver mock data ───────────────────────────────────────────────
+
+const INITIAL_PATIENTS: Patient[] = [
+  { id: "p-emma", firstName: "Emma", lastName: "Carter", avatarColor: "#9B6DFF" },
+  { id: "p-liam", firstName: "Liam", lastName: "Brooks", avatarColor: "#3DB8AD" },
+];
+
+const EMMA_CATEGORIES: Category[] = [
+  { id: "emma-morning", label: "Morning Routine", color: "#F5C842" },
+  { id: "emma-health",  label: "Health",          color: "#3DB8AD" },
+  { id: "emma-school",  label: "School",           color: "#3B82F6" },
+];
+
+const EMMA_TASKS: Task[] = [
+  {
+    id: 101, title: "Brush Teeth",
+    category: "emma-morning", schedule: { repeat: "daily", startDate: "2026-06-20", startTime: "07:15" },
+    steps: [
+      { id: 1, title: "Put toothpaste on brush", mediaType: "photo", completed: true },
+      { id: 2, title: "Brush for two minutes", mediaType: "photo", completed: false },
+      { id: 3, title: "Rinse and put brush away", mediaType: "photo", completed: false },
+    ],
+  },
+  {
+    id: 102, title: "Pack School Bag", caregiverEdited: true,
+    category: "emma-school", schedule: { repeat: "weekdays", startDate: "2026-06-22", startTime: "08:00" },
+    photoUrl: "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=600&h=300&fit=crop&auto=format",
+    steps: [
+      { id: 1, title: "Put lunch box in bag", mediaType: "photo", completed: false },
+      { id: 2, title: "Add water bottle", mediaType: "photo", completed: false },
+      { id: 3, title: "Check homework folder", mediaType: "photo", completed: false },
+    ],
+  },
+  {
+    id: 103, title: "Take Vitamins",
+    category: "emma-health", schedule: { repeat: "daily", startDate: "2026-06-20", startTime: "08:30" },
+    steps: [
+      { id: 1, title: "Get vitamin bottle", mediaType: "photo", completed: true },
+      { id: 2, title: "Take one with water", mediaType: "audio", completed: true },
+    ],
+  },
+];
+
+const LIAM_CATEGORIES: Category[] = [
+  { id: "liam-health",   label: "Health",   color: "#3DB8AD" },
+  { id: "liam-personal", label: "Personal", color: "#E8623A" },
+];
+
+const LIAM_TASKS: Task[] = [
+  {
+    id: 201, title: "Take Medication",
+    category: "liam-health", schedule: { repeat: "daily", startDate: "2026-06-20", startTime: "09:00" },
+    photoUrl: "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=600&h=300&fit=crop&auto=format",
+    steps: [
+      { id: 1, title: "Get pill organizer", mediaType: "photo", completed: false },
+      { id: 2, title: "Open today's section", mediaType: "audio", completed: false },
+      { id: 3, title: "Drink a full glass of water", mediaType: "photo", completed: false },
+    ],
+  },
+  {
+    id: 202, title: "Tidy Bedroom", caregiverEdited: true,
+    category: "liam-personal",
+    steps: [
+      { id: 1, title: "Make the bed", mediaType: "photo", completed: false },
+      { id: 2, title: "Put clothes in basket", mediaType: "photo", completed: false },
+    ],
+  },
+];
+
+const INITIAL_PATIENT_DATA: Record<string, { tasks: Task[]; categories: Category[] }> = {
+  self:     { tasks: INITIAL_TASKS, categories: INITIAL_CATEGORIES },
+  "p-emma": { tasks: EMMA_TASKS,    categories: EMMA_CATEGORIES },
+  "p-liam": { tasks: LIAM_TASKS,    categories: LIAM_CATEGORIES },
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────
 
 function useSpeech() {
@@ -154,6 +253,184 @@ function useSpeech() {
   const stop = () => { window.speechSynthesis.cancel(); setSpeaking(false); };
   useEffect(() => () => window.speechSynthesis.cancel(), []);
   return { speak, stop, speaking };
+}
+
+type TaskStatus = "done" | "overdue" | "todo" | "skipped";
+
+function computeTaskStatus(task: Task, today: Date): TaskStatus {
+  if (task.skipped) return "skipped";
+  const total = task.steps.length;
+  const done = task.steps.filter(s => s.completed).length;
+  if (total > 0 && done === total) return "done";
+  if (task.schedule) {
+    const start = new Date(task.schedule.startDate + "T00:00:00");
+    const tmid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    if (start < tmid) return "overdue";
+  }
+  return "todo";
+}
+
+const STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
+  todo:    { label: "To Do",   color: "#E8623A" },
+  overdue: { label: "Overdue", color: "#D4183D" },
+  done:    { label: "Done",    color: "#3DB8AD" },
+  skipped: { label: "Skipped", color: "#7A6F6A" },
+};
+
+// Gray chip shown on tasks that have been skipped.
+function SkippedTag() {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 h-5 rounded-full flex-shrink-0" style={{ background:"#ECE7E1" }}>
+      <SkipForward size={10} style={{ color:"#7A6F6A" }} strokeWidth={2.5}/>
+      <span className="text-[10px] font-black leading-none" style={{ color:"#7A6F6A", fontFamily:"Nunito, sans-serif" }}>Skipped</span>
+    </span>
+  );
+}
+
+// Small marker shown on tasks a caregiver created or edited, so both the
+// caregiver and the patient can tell them apart from self-made tasks.
+function CaregiverTag() {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 h-5 rounded-full flex-shrink-0" style={{ background:"#EBF9F8" }}>
+      <Heart size={10} style={{ color:"#3DB8AD" }} strokeWidth={2.5}/>
+      <span className="text-[10px] font-black leading-none" style={{ color:"#3DB8AD", fontFamily:"Nunito, sans-serif" }}>Caregiver</span>
+    </span>
+  );
+}
+
+// Build a clinical/educational PDF by opening a styled report in a new window
+// and triggering the browser's print → "Save as PDF". No PDF dependency needed.
+const reportEsc = (s: string) => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
+
+function printReport(docTitle: string, headerHtml: string, bodyHtml: string) {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${reportEsc(docTitle)}</title>
+  <style>
+    *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1C1A2E;margin:0;padding:48px 56px;background:#fff}
+    .head{display:flex;align-items:center;gap:16px;border-bottom:3px solid #E8623A;padding-bottom:18px;margin-bottom:24px}
+    .avatar{width:54px;height:54px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;flex-shrink:0}
+    h1{font-size:24px;margin:0} .sub{color:#7A6F6A;font-size:13px;margin-top:2px}
+    .brand{margin-left:auto;text-align:right;color:#E8623A;font-weight:800;font-size:18px} .brand small{display:block;color:#7A6F6A;font-weight:600;font-size:11px}
+    .cards{display:flex;gap:12px;margin:8px 0 28px}
+    .card{flex:1;border:1px solid #eee;border-radius:14px;padding:14px 16px} .card .n{font-size:30px;font-weight:800} .card .l{font-size:12px;color:#7A6F6A;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+    .bar{height:12px;background:#F5EDE0;border-radius:99px;overflow:hidden;margin:6px 0 4px} .bar > i{display:block;height:100%;background:#3DB8AD}
+    h2{font-size:14px;text-transform:uppercase;letter-spacing:.08em;color:#7A6F6A;margin:26px 0 10px}
+    table{width:100%;border-collapse:collapse;font-size:13px} th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #eee} th{color:#7A6F6A;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+    .pill{color:#fff;font-weight:700;font-size:11px;padding:3px 9px;border-radius:99px} .tag{font-size:9px;font-weight:800;color:#3DB8AD;background:#EBF9F8;padding:2px 6px;border-radius:99px;vertical-align:middle}
+    .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:middle}
+    .foot{margin-top:34px;color:#9b9089;font-size:11px;border-top:1px solid #eee;padding-top:12px}
+    @media print{body{padding:24px 28px}}
+  </style></head><body>
+    ${headerHtml}
+    ${bodyHtml}
+    <div class="foot">This report summarises in-app task engagement for review purposes. Figures reflect the current session of the CanPlan 2.0 prototype.</div>
+    <script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script>
+  </body></html>`;
+  const win = window.open("", "_blank", "width=820,height=1000");
+  if (!win) { alert("Please allow pop-ups to generate the report."); return; }
+  win.document.write(html);
+  win.document.close();
+}
+
+function reportHeader(title: string, subtitle: string, avatar?: { initials: string; color: string }) {
+  const today = new Date();
+  const generated = today.toLocaleDateString("en-CA", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const av = avatar ? `<div class="avatar" style="background:${avatar.color}">${reportEsc(avatar.initials)}</div>` : "";
+  return `<div class="head">${av}
+    <div><h1>${reportEsc(title)}</h1><div class="sub">${reportEsc(subtitle)} · Generated ${reportEsc(generated)}</div></div>
+    <div class="brand">CanPlan 2.0<small>Clinical / educational review</small></div>
+  </div>`;
+}
+
+function patientTotals(tasks: Task[], today: Date) {
+  const byStatus = { todo: 0, overdue: 0, done: 0, skipped: 0 };
+  let totalSteps = 0, doneSteps = 0;
+  tasks.forEach(t => {
+    const st = computeTaskStatus(t, today);
+    byStatus[st]++;
+    if (st !== "skipped") {                 // skipped tasks are excluded from completion %
+      totalSteps += t.steps.length;
+      doneSteps += t.steps.filter(s => s.completed).length;
+    }
+  });
+  const pct = totalSteps ? Math.round((doneSteps / totalSteps) * 100) : 0;
+  return { byStatus, totalSteps, doneSteps, pct };
+}
+
+function openPatientReport(patient: Patient, tasks: Task[], categories: Category[]) {
+  const today = new Date();
+  const { byStatus, totalSteps, doneSteps, pct } = patientTotals(tasks, today);
+  const rows = tasks.map(t => {
+    const cat = categories.find(c => c.id === t.category);
+    const d = t.steps.filter(s => s.completed).length;
+    const st = computeTaskStatus(t, today);
+    const sched = t.schedule ? `${REPEAT_LABELS[t.schedule.repeat]} · ${t.schedule.startTime}` : "Unscheduled";
+    return `<tr>
+      <td>${reportEsc(t.title)}${t.caregiverEdited ? ' <span class="tag">caregiver</span>' : ""}</td>
+      <td>${cat ? reportEsc(cat.label) : "—"}</td>
+      <td>${reportEsc(sched)}</td>
+      <td>${d}/${t.steps.length}</td>
+      <td><span class="pill" style="background:${STATUS_META[st].color}">${STATUS_META[st].label}</span></td>
+    </tr>`;
+  }).join("");
+  const header = reportHeader(
+    `${patient.firstName}${patient.lastName ? " " + patient.lastName : ""}`,
+    "Task engagement report",
+    { initials: (patient.firstName[0] + (patient.lastName?.[0] ?? "")).toUpperCase(), color: patient.avatarColor }
+  );
+  const body = `
+    <div class="cards">
+      <div class="card"><div class="n">${tasks.length}</div><div class="l">Tasks</div></div>
+      <div class="card"><div class="n" style="color:#E8623A">${byStatus.todo}</div><div class="l">To Do</div></div>
+      <div class="card"><div class="n" style="color:#D4183D">${byStatus.overdue}</div><div class="l">Overdue</div></div>
+      <div class="card"><div class="n" style="color:#3DB8AD">${byStatus.done}</div><div class="l">Done</div></div>
+      <div class="card"><div class="n" style="color:#7A6F6A">${byStatus.skipped}</div><div class="l">Skipped</div></div>
+    </div>
+    <h2>Overall step completion — ${pct}%</h2>
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    <div class="sub">${doneSteps} of ${totalSteps} steps completed across all tasks</div>
+    <h2>Task detail</h2>
+    <table><thead><tr><th>Task</th><th>Category</th><th>Schedule</th><th>Steps</th><th>Status</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5" style="color:#9b9089">No tasks recorded.</td></tr>'}</tbody></table>`;
+  printReport(`CanPlan Report — ${patient.firstName}`, header, body);
+}
+
+function openAllPatientsReport(patients: Patient[], patientData: Record<string, { tasks: Task[]; categories: Category[] }>) {
+  const today = new Date();
+  const agg = { todo: 0, overdue: 0, done: 0, skipped: 0 };
+  let allSteps = 0, allDone = 0, allTasks = 0;
+  const rows = patients.map(p => {
+    const tasks = patientData[p.id]?.tasks ?? [];
+    const { byStatus, totalSteps, doneSteps, pct } = patientTotals(tasks, today);
+    agg.todo += byStatus.todo; agg.overdue += byStatus.overdue; agg.done += byStatus.done; agg.skipped += byStatus.skipped;
+    allSteps += totalSteps; allDone += doneSteps; allTasks += tasks.length;
+    return `<tr>
+      <td><span class="dot" style="background:${p.avatarColor}"></span>${reportEsc(p.firstName)}${p.lastName ? " " + reportEsc(p.lastName) : ""}</td>
+      <td>${tasks.length}</td>
+      <td style="color:#E8623A;font-weight:700">${byStatus.todo}</td>
+      <td style="color:#D4183D;font-weight:700">${byStatus.overdue}</td>
+      <td style="color:#3DB8AD;font-weight:700">${byStatus.done}</td>
+      <td style="color:#7A6F6A;font-weight:700">${byStatus.skipped}</td>
+      <td>${pct}%</td>
+    </tr>`;
+  }).join("");
+  const pct = allSteps ? Math.round((allDone / allSteps) * 100) : 0;
+  const header = reportHeader("All people", `${patients.length} ${patients.length === 1 ? "person" : "people"} supported`);
+  const body = `
+    <div class="cards">
+      <div class="card"><div class="n">${patients.length}</div><div class="l">People</div></div>
+      <div class="card"><div class="n">${allTasks}</div><div class="l">Tasks</div></div>
+      <div class="card"><div class="n" style="color:#E8623A">${agg.todo}</div><div class="l">To Do</div></div>
+      <div class="card"><div class="n" style="color:#D4183D">${agg.overdue}</div><div class="l">Overdue</div></div>
+      <div class="card"><div class="n" style="color:#3DB8AD">${agg.done}</div><div class="l">Done</div></div>
+      <div class="card"><div class="n" style="color:#7A6F6A">${agg.skipped}</div><div class="l">Skipped</div></div>
+    </div>
+    <h2>Combined step completion — ${pct}%</h2>
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    <div class="sub">${allDone} of ${allSteps} steps completed across everyone</div>
+    <h2>Per-person summary</h2>
+    <table><thead><tr><th>Person</th><th>Tasks</th><th>To Do</th><th>Overdue</th><th>Done</th><th>Skipped</th><th>Complete</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7" style="color:#9b9089">No people linked.</td></tr>'}</tbody></table>`;
+  printReport("CanPlan Report — All people", header, body);
 }
 
 function TaskCard({ task, categories, onClick }: { task: Task; categories: Category[]; onClick: () => void }) {
@@ -209,12 +486,34 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoPlaySounds: false,
   speechSpeed: 50,
   taskIconSize: 50,
+  showCaregiverTags: true,
 };
 
 export default function App() {
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
-  const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
-  const [screen, setScreen] = useState<Screen>("login");
+  // Task/category data is keyed by patient. The patient's own login uses "self";
+  // a caregiver switches the active patient to manage their slice.
+  const [patientData, setPatientData] = useState<Record<string, { tasks: Task[]; categories: Category[] }>>(INITIAL_PATIENT_DATA);
+  const [patients, setPatients] = useState<Patient[]>(INITIAL_PATIENTS);
+  const [role, setRole] = useState<SessionRole>(null);
+  const [caregiver, setCaregiver] = useState<Caregiver | null>(null);
+  const [activePatientId, setActivePatientId] = useState<string>("self");
+
+  const tasks = patientData[activePatientId]?.tasks ?? [];
+  const categories = patientData[activePatientId]?.categories ?? [];
+  const setTasks = (updater: Task[] | ((prev: Task[]) => Task[])) =>
+    setPatientData(prev => {
+      const cur = prev[activePatientId] ?? { tasks: [], categories: [] };
+      const next = typeof updater === "function" ? (updater as (p: Task[]) => Task[])(cur.tasks) : updater;
+      return { ...prev, [activePatientId]: { ...cur, tasks: next } };
+    });
+  const setCategories = (updater: Category[] | ((prev: Category[]) => Category[])) =>
+    setPatientData(prev => {
+      const cur = prev[activePatientId] ?? { tasks: [], categories: [] };
+      const next = typeof updater === "function" ? (updater as (p: Category[]) => Category[])(cur.categories) : updater;
+      return { ...prev, [activePatientId]: { ...cur, categories: next } };
+    });
+
+  const [screen, setScreen] = useState<Screen>("welcome");
   const [activeTaskId, setActiveTaskId] = useState<number | null>(null);
   const [activeStepId, setActiveStepId] = useState<number | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
@@ -229,8 +528,37 @@ export default function App() {
   const editingTask = editingTaskId != null ? (tasks.find(t => t.id === editingTaskId) ?? null) : null;
 
   const handleLogin = () => {
+    setRole("patient");
+    setActivePatientId("self");
     if (appSettings.simpleMode) setScreen(appSettings.startingPage as Screen);
     else setScreen("home");
+  };
+
+  const handleCaregiverLogin = () => {
+    setRole("caregiver");
+    setActivePatientId("self");
+    if (!caregiver) setCaregiver({ id: "cg-1", firstName: "Sam", relationship: "Support worker", patientIds: patients.map(p => p.id) });
+    setScreen("caregiver-home");
+  };
+
+  const signOut = () => { setRole(null); setActivePatientId("self"); setScreen("welcome"); };
+
+  const openPatient = (id: string) => { setActivePatientId(id); setScreen("caregiver-overview"); };
+  const exitToCaregiverHome = () => { setActivePatientId("self"); setScreen("caregiver-home"); };
+
+  const addPatient = (firstName: string, lastName?: string) => {
+    const id = "p-" + Date.now().toString(36);
+    const color = CATEGORY_COLORS[patients.length % CATEGORY_COLORS.length];
+    setPatients(prev => [...prev, { id, firstName, lastName, avatarColor: color }]);
+    setPatientData(prev => ({ ...prev, [id]: { tasks: [], categories: [] } }));
+    setCaregiver(prev => prev ? { ...prev, patientIds: [...prev.patientIds, id] } : prev);
+  };
+
+  // Back target for top-level screens. A caregiver managing a patient returns
+  // to that patient's overview; otherwise to their dashboard.
+  const goHomeBack = () => {
+    if (role === "caregiver") setScreen(activePatientId !== "self" ? "caregiver-overview" : "caregiver-home");
+    else setScreen(appSettings.simpleMode ? (appSettings.startingPage as Screen) : "home");
   };
 
   const toggleStep = (taskId: number, stepId: number) =>
@@ -238,12 +566,17 @@ export default function App() {
       t.id === taskId ? { ...t, steps: t.steps.map(s => s.id === stepId ? { ...s, completed: !s.completed } : s) } : t
     ));
 
+  const toggleSkip = (taskId: number) =>
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, skipped: !t.skipped } : t));
+
   const openTask = (id: number, source: Screen = "all-tasks") => { setActiveTaskId(id); setTaskDetailSource(source); setScreen("task-detail"); };
   const openStep = (taskId: number, stepId: number) => { setActiveTaskId(taskId); setActiveStepId(stepId); setScreen("step-view"); };
 
   const saveTask = (task: Task) => {
-    if (editingTaskId != null) setTasks(prev => prev.map(t => t.id === task.id ? task : t));
-    else setTasks(prev => [...prev, task]);
+    // Tasks created or edited by a caregiver are flagged so they can be marked.
+    const tagged = role === "caregiver" ? { ...task, caregiverEdited: true } : task;
+    if (editingTaskId != null) setTasks(prev => prev.map(t => t.id === tagged.id ? tagged : t));
+    else setTasks(prev => [...prev, tagged]);
     setEditingTaskId(null); setCreateDefaultCategory(undefined); setScreen(createSource);
   };
 
@@ -263,7 +596,15 @@ export default function App() {
     setCreateSource(source); setCreateDefaultCategory(defaultCat); setEditingTaskId(editId ?? null); setScreen("create");
   };
 
-  const simpleStartScreen = appSettings.startingPage as Screen;
+
+  // Caregivers always get the full management surface, regardless of the
+  // patient's own simpleMode, and always see a Back button (never "home" mode).
+  const isCaregiver = role === "caregiver";
+  const effectiveSimpleMode = isCaregiver ? false : appSettings.simpleMode;
+  const activePatient = patients.find(p => p.id === activePatientId) ?? null;
+  const managing = isCaregiver && activePatientId !== "self" && !!activePatient;
+  const bannerScreens: Screen[] = ["all-tasks","categories","category-detail","calendar","task-detail","create","settings"];
+  const showBanner = managing && bannerScreens.includes(screen);
 
   return (
     <div className="size-full flex items-center justify-center bg-[#D6CBBF]">
@@ -275,22 +616,29 @@ export default function App() {
           <div className="w-4 h-2.5 border-2 border-[#1C1A2E]/40 rounded-sm overflow-hidden"><div className="h-full bg-[#1C1A2E]/60 w-3/4" /></div>
         </div>
         <div className="flex-1 overflow-hidden flex flex-col relative">
-          {screen==="login" && <LoginScreen onLogin={handleLogin} onSignUp={()=>setScreen("signup")} onForgot={()=>setScreen("forgot-password")}/>}
+          {showBanner && activePatient && <ManagingBanner patient={activePatient} onExit={()=>setScreen("caregiver-overview")}/>}
+          {screen==="welcome" && <WelcomeScreen onPatient={()=>setScreen("login")} onCaregiver={()=>setScreen("caregiver-login")}/>}
+          {screen==="login" && <LoginScreen onLogin={handleLogin} onSignUp={()=>setScreen("signup")} onForgot={()=>setScreen("forgot-password")} onBack={()=>setScreen("welcome")}/>}
           {screen==="signup" && <SignUpScreen onBack={()=>setScreen("login")} onNext={()=>setScreen("verify-email")}/>}
           {screen==="verify-email" && <VerifyEmailScreen onVerified={()=>setScreen("signup-info")}/>}
           {screen==="signup-info" && <SignUpInfoScreen onDone={handleLogin}/>}
           {screen==="forgot-password" && <ForgotPasswordScreen onBack={()=>setScreen("login")}/>}
-          {screen==="home" && <HomeScreen onAllTasks={()=>setScreen("all-tasks")} onCategories={()=>setScreen("categories")} onCalendar={()=>setScreen("calendar")} onSignOut={()=>setScreen("login")} onSettings={()=>setScreen("settings")}/>}
-          {screen==="all-tasks" && <AllTasksScreen tasks={tasks} categories={categories} onBack={()=>setScreen(appSettings.simpleMode?simpleStartScreen:"home")} onOpen={id=>openTask(id,"all-tasks")} onAdd={()=>goToCreate("all-tasks")} onEdit={id=>goToCreate("all-tasks",undefined,id)} onDelete={deleteTask} onReorder={setTasks} onSettings={()=>setScreen("settings")} simpleMode={appSettings.simpleMode} isHome={appSettings.simpleMode&&appSettings.startingPage==="all-tasks"}/>}
-          {screen==="categories" && <CategoriesScreen tasks={tasks} categories={categories} onBack={()=>setScreen(appSettings.simpleMode?simpleStartScreen:"home")} onSelect={id=>{setActiveCategory(id);setScreen("category-detail");}} onAdd={addCategory} onEdit={updateCategory} onDelete={deleteCategory} simpleMode={appSettings.simpleMode} isHome={appSettings.simpleMode&&appSettings.startingPage==="categories"} onSettings={()=>setScreen("settings")}/>}
-          {screen==="category-detail" && activeCategory && <CategoryDetailScreen tasks={tasks} categories={categories} categoryId={activeCategory} onBack={()=>setScreen("categories")} onOpen={id=>openTask(id,"category-detail")} onAddTask={()=>goToCreate("category-detail",activeCategory)} onEditTask={id=>goToCreate("category-detail",activeCategory,id)} onDeleteTask={deleteTask} simpleMode={appSettings.simpleMode} onReorderTasks={orderedIds=>{setTasks(prev=>{const positions=prev.reduce((acc,t,i)=>{if(orderedIds.includes(t.id))acc.push(i);return acc;},[]);const ordered=orderedIds.map(id=>prev.find(t=>t.id===id)!);const result=[...prev];positions.forEach((pos,i)=>{result[pos]=ordered[i];});return result;});}}/>}
-          {screen==="calendar" && <CalendarScreen tasks={tasks} categories={categories} onBack={()=>setScreen(appSettings.simpleMode?simpleStartScreen:"home")} onOpen={id=>openTask(id,"calendar")} onAddTask={()=>goToCreate("calendar")} simpleMode={appSettings.simpleMode} isHome={appSettings.simpleMode&&appSettings.startingPage==="calendar"} onSettings={()=>setScreen("settings")}/>}
-          {screen==="settings" && <SettingsScreen settings={appSettings} onUpdate={s=>setAppSettings(s)} onBack={()=>setScreen(appSettings.simpleMode?simpleStartScreen:"home")}/>}
+          {screen==="caregiver-login" && <CaregiverLoginScreen onLogin={handleCaregiverLogin} onForgot={()=>setScreen("caregiver-forgot")} onBack={()=>setScreen("welcome")}/>}
+          {screen==="caregiver-forgot" && <CaregiverForgotScreen onBack={()=>setScreen("caregiver-login")}/>}
+          {screen==="caregiver-home" && <CaregiverHomeScreen caregiver={caregiver} patients={patients} patientData={patientData} onOpenPatient={openPatient} onAddPatient={()=>setScreen("caregiver-add-patient")} onReportAll={()=>openAllPatientsReport(patients,patientData)} onSettings={()=>setScreen("settings")} onSignOut={signOut}/>}
+          {screen==="caregiver-overview" && activePatient && <CaregiverOverviewScreen patient={activePatient} tasks={tasks} categories={categories} showCaregiverTags={appSettings.showCaregiverTags} onBack={exitToCaregiverHome} onManage={()=>setScreen("all-tasks")} onOpenTask={id=>openTask(id,"all-tasks")} onReport={()=>openPatientReport(activePatient,tasks,categories)}/>}
+          {screen==="caregiver-add-patient" && <CaregiverAddPatientScreen onBack={()=>setScreen("caregiver-home")} onLink={(first,last)=>{addPatient(first,last);setScreen("caregiver-home");}}/>}
+          {screen==="home" && <HomeScreen onAllTasks={()=>setScreen("all-tasks")} onCategories={()=>setScreen("categories")} onCalendar={()=>setScreen("calendar")} onSignOut={signOut} onSettings={()=>setScreen("settings")}/>}
+          {screen==="all-tasks" && <AllTasksScreen tasks={tasks} categories={categories} showCaregiverTags={appSettings.showCaregiverTags} onBack={goHomeBack} onOpen={id=>openTask(id,"all-tasks")} onAdd={()=>goToCreate("all-tasks")} onEdit={id=>goToCreate("all-tasks",undefined,id)} onDelete={deleteTask} onReorder={setTasks} onSettings={()=>setScreen("settings")} simpleMode={effectiveSimpleMode} isHome={!isCaregiver&&appSettings.simpleMode&&appSettings.startingPage==="all-tasks"}/>}
+          {screen==="categories" && <CategoriesScreen tasks={tasks} categories={categories} onBack={goHomeBack} onSelect={id=>{setActiveCategory(id);setScreen("category-detail");}} onAdd={addCategory} onEdit={updateCategory} onDelete={deleteCategory} simpleMode={effectiveSimpleMode} isHome={!isCaregiver&&appSettings.simpleMode&&appSettings.startingPage==="categories"} onSettings={()=>setScreen("settings")}/>}
+          {screen==="category-detail" && activeCategory && <CategoryDetailScreen tasks={tasks} categories={categories} showCaregiverTags={appSettings.showCaregiverTags} categoryId={activeCategory} onBack={()=>setScreen("categories")} onOpen={id=>openTask(id,"category-detail")} onAddTask={()=>goToCreate("category-detail",activeCategory)} onEditTask={id=>goToCreate("category-detail",activeCategory,id)} onDeleteTask={deleteTask} simpleMode={effectiveSimpleMode} onReorderTasks={orderedIds=>{setTasks(prev=>{const positions=prev.reduce<number[]>((acc,t,i)=>{if(orderedIds.includes(t.id))acc.push(i);return acc;},[]);const ordered=orderedIds.map(id=>prev.find(t=>t.id===id)!);const result=[...prev];positions.forEach((pos,i)=>{result[pos]=ordered[i];});return result;});}}/>}
+          {screen==="calendar" && <CalendarScreen tasks={tasks} categories={categories} showCaregiverTags={appSettings.showCaregiverTags} onBack={goHomeBack} onOpen={id=>openTask(id,"calendar")} onAddTask={()=>goToCreate("calendar")} simpleMode={effectiveSimpleMode} isHome={!isCaregiver&&appSettings.simpleMode&&appSettings.startingPage==="calendar"} onSettings={()=>setScreen("settings")}/>}
+          {screen==="settings" && <SettingsScreen settings={appSettings} onUpdate={s=>setAppSettings(s)} onBack={goHomeBack} caregiverMode={isCaregiver} caregiverInfo={caregiver}/>}
           {screen==="create" && <CreateScreen categories={categories} defaultCategory={createDefaultCategory} initialTask={editingTask??undefined} onBack={()=>{setEditingTaskId(null);setScreen(createSource);}} onSave={saveTask}/>}
-          {screen==="task-detail" && activeTask && <TaskDetail task={activeTask} categories={categories} onBack={()=>setScreen(taskDetailSource)} onStepTap={stepId=>openStep(activeTask.id,stepId)} onToggle={stepId=>toggleStep(activeTask.id,stepId)}/>}
+          {screen==="task-detail" && activeTask && <TaskDetail task={activeTask} categories={categories} hideAudio={isCaregiver} showCaregiverTags={appSettings.showCaregiverTags} onBack={()=>setScreen(taskDetailSource)} onStepTap={stepId=>openStep(activeTask.id,stepId)} onToggle={stepId=>toggleStep(activeTask.id,stepId)} onSkip={()=>toggleSkip(activeTask.id)}/>}
           {screen==="step-view" && activeTask && activeStep && (
             <StepView task={activeTask} step={activeStep} stepIndex={activeTask.steps.findIndex(s=>s.id===activeStep.id)} totalSteps={activeTask.steps.length}
-              autoPlaySounds={appSettings.autoPlaySounds}
+              autoPlaySounds={appSettings.autoPlaySounds} hideAudio={isCaregiver}
               onBack={()=>{const idx=activeTask.steps.findIndex(s=>s.id===activeStep.id);const prev=activeTask.steps[idx-1];if(prev)setActiveStepId(prev.id);else setScreen("task-detail");}}
               onToggle={()=>{toggleStep(activeTask.id,activeStep.id);setScreen("task-detail");}}
               onNext={()=>{const idx=activeTask.steps.findIndex(s=>s.id===activeStep.id);const next=activeTask.steps[idx+1];if(!activeStep.completed)toggleStep(activeTask.id,activeStep.id);if(next)setActiveStepId(next.id);else setScreen("task-detail");}}
@@ -354,8 +702,8 @@ function HomeScreen({ onAllTasks, onCategories, onCalendar, onSignOut, onSetting
 
 // ── All Tasks ─────────────────────────────────────────────────────────
 
-function AllTasksScreen({ tasks, categories, onBack, onOpen, onAdd, onEdit, onDelete, onReorder, onSettings, simpleMode, isHome }: {
-  tasks:Task[]; categories:Category[]; onBack:()=>void; onOpen:(id:number)=>void; onAdd:()=>void; onEdit:(id:number)=>void; onDelete:(id:number)=>void; onReorder:(t:Task[])=>void; onSettings:()=>void; simpleMode:boolean; isHome:boolean;
+function AllTasksScreen({ tasks, categories, showCaregiverTags=true, onBack, onOpen, onAdd, onEdit, onDelete, onReorder, onSettings, simpleMode, isHome }: {
+  tasks:Task[]; categories:Category[]; showCaregiverTags?:boolean; onBack:()=>void; onOpen:(id:number)=>void; onAdd:()=>void; onEdit:(id:number)=>void; onDelete:(id:number)=>void; onReorder:(t:Task[])=>void; onSettings:()=>void; simpleMode:boolean; isHome:boolean;
 }) {
   const [reordering, setReordering] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number|null>(null);
@@ -419,7 +767,10 @@ function AllTasksScreen({ tasks, categories, onBack, onOpen, onAdd, onEdit, onDe
                     <div className="flex items-center">
                       {!task.photoUrl&&cat&&<div className="w-1.5 self-stretch flex-shrink-0" style={{ background:cat.color }}/>}
                       <div className="flex-1 p-4">
-                        <p className="text-xl font-black text-[#1C1A2E] leading-snug" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-xl font-black text-[#1C1A2E] leading-snug" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</p>
+                          {task.caregiverEdited&&showCaregiverTags&&<CaregiverTag/>}{task.skipped&&<SkippedTag/>}
+                        </div>
                         {cat&&<p className="text-xs font-semibold mt-0.5" style={{ color:cat.color, fontFamily:"DM Sans, sans-serif" }}>{cat.label}</p>}
                         <p className="text-sm text-[#7A6F6A] mt-1 font-semibold" style={{ fontFamily:"DM Sans, sans-serif" }}>
                           {total===0?"No steps":allDone?"✓ Done!":`${done} of ${total} steps done`}
@@ -581,8 +932,8 @@ function CategoryFormSheet({ title, initial, onClose, onSave, onDelete }: {
 
 // ── Category Detail ───────────────────────────────────────────────────
 
-function CategoryDetailScreen({ tasks, categories, categoryId, onBack, onOpen, onAddTask, onEditTask, onDeleteTask, onReorderTasks, simpleMode }: {
-  tasks:Task[]; categories:Category[]; categoryId:string; onBack:()=>void; onOpen:(id:number)=>void;
+function CategoryDetailScreen({ tasks, categories, showCaregiverTags=true, categoryId, onBack, onOpen, onAddTask, onEditTask, onDeleteTask, onReorderTasks, simpleMode }: {
+  tasks:Task[]; categories:Category[]; showCaregiverTags?:boolean; categoryId:string; onBack:()=>void; onOpen:(id:number)=>void;
   onAddTask:()=>void; onEditTask:(id:number)=>void; onDeleteTask:(id:number)=>void; onReorderTasks:(orderedIds:number[])=>void; simpleMode:boolean;
 }) {
   const cat=categories.find(c=>c.id===categoryId);
@@ -624,7 +975,10 @@ function CategoryDetailScreen({ tasks, categories, categoryId, onBack, onOpen, o
                   <button onClick={()=>onOpen(task.id)} className="w-full flex items-center text-left">
                     {cat&&<div className="w-1.5 self-stretch flex-shrink-0" style={{ background:cat.color }}/>}
                     <div className="flex-1 p-4">
-                      <p className="text-lg font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-lg font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</p>
+                        {task.caregiverEdited&&showCaregiverTags&&<CaregiverTag/>}{task.skipped&&<SkippedTag/>}
+                      </div>
                       <p className="text-sm text-[#7A6F6A] font-semibold mt-0.5" style={{ fontFamily:"DM Sans, sans-serif" }}>{total===0?"No steps":allDone?"✓ Done!":`${done} of ${total} steps done`}</p>
                       {total>0&&<div className="mt-2 h-2 bg-[#F5EDE0] rounded-full overflow-hidden"><div className="h-full rounded-full" style={{ width:`${(done/total)*100}%`, background:allDone?"#3DB8AD":"#E8623A" }}/></div>}
                     </div>
@@ -654,8 +1008,8 @@ function CategoryDetailScreen({ tasks, categories, categoryId, onBack, onOpen, o
 
 type CalTab = "todo"|"overdue"|"done"|"skipped";
 
-function CalendarScreen({ tasks, categories, onBack, onOpen, onAddTask, onSettings, simpleMode, isHome }: {
-  tasks:Task[]; categories:Category[]; onBack:()=>void; onOpen:(id:number)=>void; onAddTask:()=>void; onSettings:()=>void; simpleMode:boolean; isHome:boolean;
+function CalendarScreen({ tasks, categories, showCaregiverTags=true, onBack, onOpen, onAddTask, onSettings, simpleMode, isHome }: {
+  tasks:Task[]; categories:Category[]; showCaregiverTags?:boolean; onBack:()=>void; onOpen:(id:number)=>void; onAddTask:()=>void; onSettings:()=>void; simpleMode:boolean; isHome:boolean;
 }) {
   const today=new Date();
   const [viewYear,setViewYear]=useState(today.getFullYear());
@@ -698,10 +1052,10 @@ function CalendarScreen({ tasks, categories, onBack, onOpen, onAddTask, onSettin
 
   const allDone=(t:Task)=>t.steps.length>0&&t.steps.every(s=>s.completed);
   const tabTasks: Record<CalTab,Task[]>={
-    overdue: dayTasks.filter(t=>isSelectedPast&&!allDone(t)),
-    todo:    dayTasks.filter(t=>!isSelectedPast&&!allDone(t)),
-    done:    dayTasks.filter(t=>allDone(t)),
-    skipped: [],
+    overdue: dayTasks.filter(t=>!t.skipped&&isSelectedPast&&!allDone(t)),
+    todo:    dayTasks.filter(t=>!t.skipped&&!isSelectedPast&&!allDone(t)),
+    done:    dayTasks.filter(t=>!t.skipped&&allDone(t)),
+    skipped: dayTasks.filter(t=>t.skipped),
   };
   // auto-switch tab based on selected day
   const displayTab: CalTab = calTab==="overdue"&&!isSelectedPast ? "todo"
@@ -784,7 +1138,10 @@ function CalendarScreen({ tasks, categories, onBack, onOpen, onAddTask, onSettin
                   <div className="flex items-center">
                     {cat&&<div className="w-1.5 self-stretch flex-shrink-0" style={{ background:cat.color }}/>}
                     <div className="flex-1 p-4">
-                      <p className="text-base font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-base font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</p>
+                        {task.caregiverEdited&&showCaregiverTags&&<CaregiverTag/>}{task.skipped&&<SkippedTag/>}
+                      </div>
                       {task.schedule?.startTime&&<p className="text-xs font-semibold text-[#7A6F6A] mt-0.5" style={{ fontFamily:"DM Sans, sans-serif" }}>{task.schedule.startTime} · {REPEAT_LABELS[task.schedule.repeat]}</p>}
                       <p className="text-xs text-[#7A6F6A] mt-0.5 font-semibold" style={{ fontFamily:"DM Sans, sans-serif" }}>{total===0?"No steps":done===total?"✓ Done!":`${done}/${total} steps`}</p>
                     </div>
@@ -843,7 +1200,7 @@ function CreateScreen({ categories, defaultCategory, initialTask, onBack, onSave
   };
   const handleSave=()=>{
     if(!canSave)return;
-    onSave({id:initialTask?.id??Date.now(),title:title.trim(),category,schedule:schedule??undefined,photoUrl,
+    onSave({id:initialTask?.id??Date.now(),title:title.trim(),category,schedule:schedule??undefined,photoUrl,caregiverEdited:initialTask?.caregiverEdited,
       steps:steps.map((s,i)=>({id:i+1,title:s.title,description:s.description||undefined,mediaType:s.mediaType,completed:initialTask?.steps[i]?.completed??false,imageUrl:initialTask?.steps[i]?.imageUrl}))});
   };
   return (
@@ -1091,8 +1448,8 @@ function CategorySheet({ categories, current, onClose, onSelect }: {
 
 // ── Task Detail ───────────────────────────────────────────────────────
 
-function TaskDetail({ task, categories, onBack, onStepTap, onToggle }: {
-  task:Task; categories:Category[]; onBack:()=>void; onStepTap:(stepId:number)=>void; onToggle:(stepId:number)=>void;
+function TaskDetail({ task, categories, hideAudio=false, showCaregiverTags=true, onBack, onStepTap, onToggle, onSkip }: {
+  task:Task; categories:Category[]; hideAudio?:boolean; showCaregiverTags?:boolean; onBack:()=>void; onStepTap:(stepId:number)=>void; onToggle:(stepId:number)=>void; onSkip:()=>void;
 }) {
   const {speak,stop,speaking}=useSpeech();
   const [speakingStepId,setSpeakingStepId]=useState<number|null>(null);
@@ -1110,7 +1467,10 @@ function TaskDetail({ task, categories, onBack, onStepTap, onToggle }: {
       <div className="flex-shrink-0 flex items-center gap-4 px-5 pt-4 pb-4 bg-[#FEF7EE]">
         <button onClick={onBack} className="w-12 h-12 rounded-2xl bg-white border border-black/[0.08] flex items-center justify-center shadow-sm"><ArrowLeft size={22} className="text-[#1C1A2E]"/></button>
         <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-black text-[#1C1A2E] leading-tight" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl font-black text-[#1C1A2E] leading-tight" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</h1>
+            {task.caregiverEdited&&showCaregiverTags&&<CaregiverTag/>}{task.skipped&&<SkippedTag/>}
+          </div>
           <p className="text-sm font-semibold mt-0.5" style={{ fontFamily:"DM Sans, sans-serif", color:cat?cat.color:"#7A6F6A" }}>
             {cat?cat.label+` · ${done} of ${total} steps done`:`${done} of ${total} steps done`}
           </p>
@@ -1120,6 +1480,12 @@ function TaskDetail({ task, categories, onBack, onStepTap, onToggle }: {
         <div className="h-full rounded-full transition-all duration-500" style={{ width:`${total?((done/total)*100):0}%`, background:allDone?"#3DB8AD":"#E8623A" }}/>
       </div>
       <div className="flex-1 overflow-y-auto px-5 pt-4 pb-6 space-y-3">
+        {task.skipped&&(
+          <div className="rounded-[1.5rem] p-4 flex items-center gap-3" style={{ background:"#ECE7E1" }}>
+            <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center flex-shrink-0"><SkipForward size={18} style={{ color:"#7A6F6A" }} strokeWidth={2.5}/></div>
+            <p className="flex-1 text-sm font-semibold text-[#7A6F6A]" style={{ fontFamily:"DM Sans, sans-serif" }}>This task is skipped. It will show under <span className="font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>Skipped</span> in the calendar.</p>
+          </div>
+        )}
         {task.steps.map((step,idx)=>(
           <div key={step.id} onClick={()=>onStepTap(step.id)} role="button" tabIndex={0} onKeyDown={e=>e.key==="Enter"&&onStepTap(step.id)}
             className={`bg-white rounded-[1.75rem] overflow-hidden border shadow-sm transition-all active:scale-[0.98] cursor-pointer ${step.completed?"border-[#3DB8AD]/30 opacity-70":"border-black/[0.06]"}`}>
@@ -1130,7 +1496,7 @@ function TaskDetail({ task, categories, onBack, onStepTap, onToggle }: {
                 {step.completed&&<div className="absolute inset-0 flex items-center justify-center"><div className="w-14 h-14 rounded-full bg-[#3DB8AD] flex items-center justify-center"><Check size={24} className="text-white" strokeWidth={3}/></div></div>}
               </button>
             )}
-            {!step.imageUrl&&step.mediaType==="audio"&&(
+            {!hideAudio&&!step.imageUrl&&step.mediaType==="audio"&&(
               <div className="flex items-center gap-4 px-5 py-4 bg-[#FEF0EB]">
                 <div className="w-12 h-12 rounded-full bg-[#E8623A] flex items-center justify-center flex-shrink-0"><Play size={18} className="text-white ml-0.5"/></div>
                 <div className="flex-1 h-2 bg-[#E8623A]/20 rounded-full"><div className="h-full bg-[#E8623A] rounded-full w-0"/></div>
@@ -1143,16 +1509,22 @@ function TaskDetail({ task, categories, onBack, onStepTap, onToggle }: {
                 {step.completed&&<div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-white flex items-center justify-center"><Check size={10} strokeWidth={3.5} style={{ color:"#3DB8AD" }}/></div>}
               </div>
               <p className={`flex-1 text-lg font-black leading-snug ${step.completed?"line-through text-[#7A6F6A]":"text-[#1C1A2E]"}`} style={{ fontFamily:"Nunito, sans-serif" }}>{step.title}</p>
-              <button onClick={e=>{e.stopPropagation();handleListen(step,idx);}} className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all active:scale-90" style={{ background:speakingStepId===step.id?"#E8623A":"#FEF0EB" }}>
-                {speakingStepId===step.id?<Square size={14} strokeWidth={3} style={{ color:"white" }}/>:<Volume2 size={17} strokeWidth={2.5} style={{ color:"#E8623A" }}/>}
-              </button>
+              {!hideAudio&&(
+                <button onClick={e=>{e.stopPropagation();handleListen(step,idx);}} className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all active:scale-90" style={{ background:speakingStepId===step.id?"#E8623A":"#FEF0EB" }}>
+                  {speakingStepId===step.id?<Square size={14} strokeWidth={3} style={{ color:"white" }}/>:<Volume2 size={17} strokeWidth={2.5} style={{ color:"#E8623A" }}/>}
+                </button>
+              )}
               <button onClick={e=>{e.stopPropagation();onToggle(step.id);}} className="flex items-center gap-1.5 rounded-2xl px-3 h-10 flex-shrink-0 transition-all active:scale-90" style={{ background:step.completed?"#FEE8E8":"#F5EDE0" }}>
                 {step.completed?(<><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1.5-3.5L2 5V2" stroke="#D4183D" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/><path d="M2 2v3h3" stroke="#D4183D" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg><span className="text-xs font-black" style={{ color:"#D4183D", fontFamily:"Nunito, sans-serif" }}>Undo</span></>):<Check size={18} strokeWidth={3} style={{ color:"#C9BDB5" }}/>}
               </button>
             </div>
           </div>
         ))}
-        {allDone&&<div className="rounded-[1.75rem] p-6 text-center" style={{ background:"#3DB8AD" }}><p className="text-white font-black text-2xl" style={{ fontFamily:"Nunito, sans-serif" }}>Great job!</p><p className="text-white/80 text-base mt-1" style={{ fontFamily:"DM Sans, sans-serif" }}>You finished all the steps.</p></div>}
+        {allDone&&!task.skipped&&<div className="rounded-[1.75rem] p-6 text-center" style={{ background:"#3DB8AD" }}><p className="text-white font-black text-2xl" style={{ fontFamily:"Nunito, sans-serif" }}>Great job!</p><p className="text-white/80 text-base mt-1" style={{ fontFamily:"DM Sans, sans-serif" }}>You finished all the steps.</p></div>}
+        <button onClick={onSkip} className="w-full py-4 rounded-[1.75rem] font-black text-base flex items-center justify-center gap-2.5 transition-all active:scale-[0.98]"
+          style={{ background:task.skipped?"#F5EDE0":"transparent", border:task.skipped?"none":"2px solid #C9BDB5", color:"#7A6F6A", fontFamily:"Nunito, sans-serif" }}>
+          {task.skipped?(<><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 9a6 6 0 1 0 1.8-4.2L3 6.5V3" stroke="#7A6F6A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M3 3v3.5h3.5" stroke="#7A6F6A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>Un-skip this task</>):(<><SkipForward size={18} strokeWidth={2.5}/>Skip this task</>)}
+        </button>
       </div>
     </div>
   );
@@ -1160,14 +1532,14 @@ function TaskDetail({ task, categories, onBack, onStepTap, onToggle }: {
 
 // ── Step View ─────────────────────────────────────────────────────────
 
-function StepView({ task, step, stepIndex, totalSteps, autoPlaySounds, onBack, onToggle, onNext }: {
-  task:Task; step:Step; stepIndex:number; totalSteps:number; autoPlaySounds:boolean; onBack:()=>void; onToggle:()=>void; onNext:()=>void;
+function StepView({ task, step, stepIndex, totalSteps, autoPlaySounds, hideAudio=false, onBack, onToggle, onNext }: {
+  task:Task; step:Step; stepIndex:number; totalSteps:number; autoPlaySounds:boolean; hideAudio?:boolean; onBack:()=>void; onToggle:()=>void; onNext:()=>void;
 }) {
   const {speak,stop,speaking}=useSpeech();
   const isLast=stepIndex===totalSteps-1;
   const isDone=step.completed;
   useEffect(()=>{
-    if(!autoPlaySounds)return;
+    if(!autoPlaySounds||hideAudio)return;
     const t=setTimeout(()=>speak(`Step ${stepIndex+1}. ${step.title}`),400);
     return()=>{clearTimeout(t);stop();};
   },[step.id,autoPlaySounds]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1187,10 +1559,12 @@ function StepView({ task, step, stepIndex, totalSteps, autoPlaySounds, onBack, o
         <p className="text-sm font-bold text-[#7A6F6A] uppercase tracking-widest mb-2" style={{ fontFamily:"DM Sans, sans-serif" }}>{task.title}</p>
         <h2 className="text-3xl font-black text-[#1C1A2E] leading-tight mb-4" style={{ fontFamily:"Nunito, sans-serif" }}>Step {stepIndex+1}</h2>
         <p className="text-2xl font-black text-[#1C1A2E] leading-snug" style={{ fontFamily:"Nunito, sans-serif" }}>{step.title}</p>
-        {step.mediaType==="audio"&&<div className="mt-5 bg-[#FEF0EB] rounded-2xl p-4 flex items-center gap-4"><button className="w-12 h-12 rounded-full bg-[#E8623A] flex items-center justify-center flex-shrink-0"><Play size={18} className="text-white ml-0.5"/></button><div className="flex-1 h-2.5 bg-[#E8623A]/20 rounded-full"><div className="h-full bg-[#E8623A] rounded-full w-1/3"/></div></div>}
-        <button onClick={()=>speaking?stop():speak(`Step ${stepIndex+1}. ${step.title}`)} className="mt-5 w-full py-4 rounded-[1.5rem] flex items-center justify-center gap-3 font-black text-lg transition-all active:scale-[0.98]" style={{ background:speaking?"#E8623A":"#FEF0EB", color:speaking?"white":"#E8623A", fontFamily:"Nunito, sans-serif" }}>
-          {speaking?(<><span className="flex gap-0.5 items-end h-5">{[0,1,2,3].map(i=><span key={i} className="w-1 rounded-full bg-white" style={{ height:`${[12,18,14,20][i]}px`, animation:`bounce-bar 0.8s ease-in-out ${i*0.15}s infinite alternate` }}/>)}</span>Stop listening</>):<><Volume2 size={22} strokeWidth={2.5}/>Listen to this step</>}
-        </button>
+        {!hideAudio&&step.mediaType==="audio"&&<div className="mt-5 bg-[#FEF0EB] rounded-2xl p-4 flex items-center gap-4"><button className="w-12 h-12 rounded-full bg-[#E8623A] flex items-center justify-center flex-shrink-0"><Play size={18} className="text-white ml-0.5"/></button><div className="flex-1 h-2.5 bg-[#E8623A]/20 rounded-full"><div className="h-full bg-[#E8623A] rounded-full w-1/3"/></div></div>}
+        {!hideAudio&&(
+          <button onClick={()=>speaking?stop():speak(`Step ${stepIndex+1}. ${step.title}`)} className="mt-5 w-full py-4 rounded-[1.5rem] flex items-center justify-center gap-3 font-black text-lg transition-all active:scale-[0.98]" style={{ background:speaking?"#E8623A":"#FEF0EB", color:speaking?"white":"#E8623A", fontFamily:"Nunito, sans-serif" }}>
+            {speaking?(<><span className="flex gap-0.5 items-end h-5">{[0,1,2,3].map(i=><span key={i} className="w-1 rounded-full bg-white" style={{ height:`${[12,18,14,20][i]}px`, animation:`bounce-bar 0.8s ease-in-out ${i*0.15}s infinite alternate` }}/>)}</span>Stop listening</>):<><Volume2 size={22} strokeWidth={2.5}/>Listen to this step</>}
+          </button>
+        )}
         <style>{`@keyframes bounce-bar{from{transform:scaleY(0.5);}to{transform:scaleY(1.2);}}`}</style>
         <div className="flex-1"/>
         {isDone?(
@@ -1233,8 +1607,8 @@ function SettingRow({ label, right, onPress, border=true }: { label:string; righ
   return <div>{inner}</div>;
 }
 
-function SettingsScreen({ settings, onUpdate, onBack }: {
-  settings:AppSettings; onUpdate:(s:AppSettings)=>void; onBack:()=>void;
+function SettingsScreen({ settings, onUpdate, onBack, caregiverMode=false, caregiverInfo }: {
+  settings:AppSettings; onUpdate:(s:AppSettings)=>void; onBack:()=>void; caregiverMode?:boolean; caregiverInfo?:Caregiver|null;
 }) {
   const [page, setPage] = useState<SettingsPage>("main");
   const set = <K extends keyof AppSettings>(key:K, val:AppSettings[K]) => onUpdate({ ...settings, [key]:val });
@@ -1398,7 +1772,46 @@ function SettingsScreen({ settings, onUpdate, onBack }: {
     </div>
   );
 
-  // Main settings page
+  // Caregiver portal settings — no patient-experience pages (Interface / Simple
+  // Mode / accessibility) and no Notifications or Statistics. Basic app settings
+  // plus data & privacy.
+  if (caregiverMode) {
+    const cgName = caregiverInfo ? `${caregiverInfo.firstName}${caregiverInfo.lastName ? " " + caregiverInfo.lastName : ""}` : "Caregiver";
+    const supported = caregiverInfo?.patientIds.length ?? 0;
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-shrink-0 flex items-center gap-3 px-5 pt-4 pb-3">
+          <button onClick={onBack} className="w-12 h-12 rounded-2xl bg-white border border-black/[0.08] flex items-center justify-center shadow-sm"><ArrowLeft size={22} className="text-[#1C1A2E]"/></button>
+          <h1 className="text-2xl font-black text-[#1C1A2E] flex-1" style={{ fontFamily:"Nunito, sans-serif" }}>Settings</h1>
+        </div>
+        <div className="flex-1 overflow-y-auto pb-8">
+          <SectionLabel label="Account"/>
+          <div className="mx-5 mb-4 bg-white rounded-[1.5rem] border border-black/[0.06] p-5 flex items-center gap-4">
+            <div className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0" style={{ background:"#E8623A" }}>
+              <span className="text-lg font-black text-white" style={{ fontFamily:"Nunito, sans-serif" }}>{cgName[0]?.toUpperCase()}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-lg font-black text-[#1C1A2E] truncate" style={{ fontFamily:"Nunito, sans-serif" }}>{cgName}</p>
+              <p className="text-sm text-[#7A6F6A] font-semibold" style={{ fontFamily:"DM Sans, sans-serif" }}>{caregiverInfo?.relationship ? caregiverInfo.relationship + " · " : ""}{supported} {supported===1?"person":"people"} supported</p>
+            </div>
+          </div>
+          <SectionLabel label="Preferences"/>
+          <SectionCard>
+            <SettingRow label="Show caregiver tags on tasks" border={false}
+              right={<Toggle on={settings.showCaregiverTags} onChange={v=>set("showCaregiverTags",v)}/>}/>
+          </SectionCard>
+          <SectionLabel label="Data & Privacy"/>
+          <SectionCard>
+            <SettingRow label="iCloud Settings" onPress={()=>setPage("icloud")} right={<ChevronRight2/>}/>
+            <SettingRow label="Privacy Policy" border={false} onPress={()=>setPage("privacy")} right={<ChevronRight2/>}/>
+          </SectionCard>
+          <p className="text-center text-sm text-[#7A6F6A] mt-4" style={{ fontFamily:"DM Sans, sans-serif" }}>App Version: 2.0.0</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Patient main settings page.
   const menuItems: { label:string; page:SettingsPage }[] = [
     { label:"Notifications", page:"notifications" },
     { label:"Interface", page:"interface" },
@@ -1448,11 +1861,12 @@ function AuthField({ label,placeholder,type="text",value,onChange }: { label:str
   );
 }
 
-function LoginScreen({ onLogin,onSignUp,onForgot }: { onLogin:()=>void;onSignUp:()=>void;onForgot:()=>void; }) {
+function LoginScreen({ onLogin,onSignUp,onForgot,onBack }: { onLogin:()=>void;onSignUp:()=>void;onForgot:()=>void;onBack?:()=>void; }) {
   const [email,setEmail]=useState("");const [password,setPassword]=useState("");const canLogin=email.trim()&&password.trim();
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex-shrink-0 flex flex-col items-center justify-center px-8 pt-6 pb-5" style={{ background:"linear-gradient(160deg,#E8623A,#F07B3A)" }}>
+      <div className="relative flex-shrink-0 flex flex-col items-center justify-center px-8 pt-6 pb-5" style={{ background:"linear-gradient(160deg,#E8623A,#F07B3A)" }}>
+        {onBack&&<button onClick={onBack} className="absolute left-5 top-5 w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center active:scale-90 transition-all"><ArrowLeft size={18} className="text-white"/></button>}
         <h1 className="text-2xl font-black text-white leading-tight" style={{ fontFamily:"Nunito, sans-serif" }}>CanPlan 2.0</h1>
         <p className="text-white/80 text-sm font-semibold" style={{ fontFamily:"DM Sans, sans-serif" }}>Your daily task guide</p>
       </div>
@@ -1537,6 +1951,278 @@ function SignUpInfoScreen({ onDone }: { onDone:()=>void; }) {
         <div className="space-y-4 mb-6"><AuthField label="First name" placeholder="e.g. Alex" value={firstName} onChange={setFirstName}/><AuthField label="Last name (optional)" placeholder="e.g. Smith" value={lastName} onChange={setLastName}/></div>
         <button onClick={onDone} disabled={!canContinue} className="w-full py-5 rounded-[1.75rem] font-black text-xl text-white transition-all active:scale-[0.98]" style={{ background:canContinue?"linear-gradient(135deg,#E8623A,#F07B3A)":"#C9BDB5", fontFamily:"Nunito, sans-serif", cursor:canContinue?"pointer":"not-allowed" }}>Get Started</button>
         <div className="flex-1"/>
+      </div>
+    </div>
+  );
+}
+
+// ── Caregiver Portal ──────────────────────────────────────────────────
+
+function ManagingBanner({ patient, onExit }: { patient:Patient; onExit:()=>void; }) {
+  return (
+    <div className="flex-shrink-0 flex items-center gap-3 px-5 py-2.5" style={{ background:"#FEF0EB", borderBottom:"1px solid rgba(232,98,58,0.18)" }}>
+      <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0" style={{ background:patient.avatarColor }}>
+        <span className="text-xs font-black text-white" style={{ fontFamily:"Nunito, sans-serif" }}>{patient.firstName[0].toUpperCase()}</span>
+      </div>
+      <p className="flex-1 min-w-0 text-sm text-[#7A6F6A] truncate font-semibold" style={{ fontFamily:"DM Sans, sans-serif" }}>
+        Managing <span className="font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>{patient.firstName}{patient.lastName?` ${patient.lastName}`:""}</span>
+      </p>
+      <button onClick={onExit} className="px-3 h-8 rounded-xl flex items-center justify-center active:scale-95 transition-all" style={{ background:"#E8623A" }}>
+        <span className="text-xs font-black text-white" style={{ fontFamily:"Nunito, sans-serif" }}>Done</span>
+      </button>
+    </div>
+  );
+}
+
+function WelcomeScreen({ onPatient, onCaregiver }: { onPatient:()=>void; onCaregiver:()=>void; }) {
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-shrink-0 flex flex-col items-center justify-center px-8 pt-10 pb-9" style={{ background:"linear-gradient(160deg,#E8623A,#F07B3A)" }}>
+        <h1 className="text-3xl font-black text-white leading-tight" style={{ fontFamily:"Nunito, sans-serif" }}>CanPlan 2.0</h1>
+        <p className="text-white/80 text-base font-semibold mt-1" style={{ fontFamily:"DM Sans, sans-serif" }}>Your daily task guide</p>
+      </div>
+      <div className="flex-1 flex flex-col px-6 pt-7 pb-6">
+        <h2 className="text-2xl font-black text-[#1C1A2E] mb-1" style={{ fontFamily:"Nunito, sans-serif" }}>Welcome!</h2>
+        <p className="text-base text-[#7A6F6A] font-semibold mb-6" style={{ fontFamily:"DM Sans, sans-serif" }}>How will you use CanPlan?</p>
+        <div className="space-y-4">
+          <button onClick={onPatient} className="w-full rounded-[1.75rem] p-6 flex items-center gap-5 text-left active:scale-[0.98] transition-transform shadow-sm" style={{ background:"linear-gradient(135deg,#E8623A,#F07B3A)" }}>
+            <div className="w-14 h-14 rounded-2xl bg-white/20 flex items-center justify-center flex-shrink-0"><Check size={28} className="text-white" strokeWidth={2.5}/></div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xl font-black text-white" style={{ fontFamily:"Nunito, sans-serif" }}>I use CanPlan</p>
+              <p className="text-white/80 text-sm font-semibold mt-0.5" style={{ fontFamily:"DM Sans, sans-serif" }}>See and complete my own tasks</p>
+            </div>
+          </button>
+          <button onClick={onCaregiver} className="w-full rounded-[1.75rem] p-6 flex items-center gap-5 text-left active:scale-[0.98] transition-transform shadow-sm bg-white border border-black/[0.06]">
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ background:"#EBF9F8" }}><Heart size={26} style={{ color:"#3DB8AD" }} strokeWidth={2.2}/></div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xl font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>{"I'm a caregiver"}</p>
+              <p className="text-[#7A6F6A] text-sm font-semibold mt-0.5" style={{ fontFamily:"DM Sans, sans-serif" }}>Help manage tasks for someone I support</p>
+            </div>
+          </button>
+        </div>
+        <div className="flex-1"/>
+        <p className="text-center text-sm text-[#7A6F6A]" style={{ fontFamily:"DM Sans, sans-serif" }}>You can switch any time by signing out.</p>
+      </div>
+    </div>
+  );
+}
+
+function CaregiverLoginScreen({ onLogin, onForgot, onBack }: { onLogin:()=>void; onForgot:()=>void; onBack:()=>void; }) {
+  const [email,setEmail]=useState("");const [password,setPassword]=useState("");const canLogin=email.trim()&&password.trim();
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="relative flex-shrink-0 flex flex-col items-center justify-center px-8 pt-6 pb-5" style={{ background:"linear-gradient(160deg,#E8623A,#F07B3A)" }}>
+        <button onClick={onBack} className="absolute left-5 top-5 w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center active:scale-90 transition-all"><ArrowLeft size={18} className="text-white"/></button>
+        <h1 className="text-2xl font-black text-white leading-tight" style={{ fontFamily:"Nunito, sans-serif" }}>CanPlan 2.0</h1>
+        <p className="text-white/80 text-sm font-semibold" style={{ fontFamily:"DM Sans, sans-serif" }}>Caregiver sign in</p>
+      </div>
+      <div className="flex-1 flex flex-col px-6 pt-6 pb-4">
+        <h2 className="text-2xl font-black text-[#1C1A2E] mb-1" style={{ fontFamily:"Nunito, sans-serif" }}>Sign In</h2>
+        <p className="text-sm text-[#7A6F6A] font-semibold mb-5" style={{ fontFamily:"DM Sans, sans-serif" }}>Access the people you support</p>
+        <div className="space-y-3"><AuthField label="Email address" placeholder="e.g. sam@email.com" value={email} onChange={setEmail}/><AuthField label="Password" placeholder="Enter your password" type="password" value={password} onChange={setPassword}/></div>
+        <button onClick={onForgot} className="text-right text-sm font-semibold mt-2 mb-1 text-[#E8623A]" style={{ fontFamily:"DM Sans, sans-serif" }}>Forgot password?</button>
+        <button onClick={onLogin} className="w-full py-4 rounded-[1.75rem] font-black text-xl text-white transition-all active:scale-[0.98] mt-2" style={{ background:canLogin?"linear-gradient(135deg,#E8623A,#F07B3A)":"#C9BDB5", fontFamily:"Nunito, sans-serif" }}>Sign In</button>
+        <div className="flex-1"/>
+        <p className="text-center text-sm text-[#7A6F6A]" style={{ fontFamily:"DM Sans, sans-serif" }}>Caregiver accounts are set up by your CanPlan administrator.</p>
+      </div>
+    </div>
+  );
+}
+
+function CaregiverForgotScreen({ onBack }: { onBack:()=>void; }) {
+  return <ForgotPasswordScreen onBack={onBack}/>;
+}
+
+function CaregiverHomeScreen({ caregiver, patients, patientData, onOpenPatient, onAddPatient, onReportAll, onSettings, onSignOut }: {
+  caregiver:Caregiver|null; patients:Patient[]; patientData:Record<string,{tasks:Task[];categories:Category[]}>;
+  onOpenPatient:(id:string)=>void; onAddPatient:()=>void; onReportAll:()=>void; onSettings:()=>void; onSignOut:()=>void;
+}) {
+  const [confirmSignOut,setConfirmSignOut]=useState(false);
+  const [query,setQuery]=useState("");
+  const today=new Date().toLocaleDateString("en-CA",{weekday:"long",month:"long",day:"numeric"});
+  const name=caregiver?.firstName??"there";
+  const q=query.trim().toLowerCase();
+  const filtered=q?patients.filter(p=>`${p.firstName} ${p.lastName??""}`.toLowerCase().includes(q)):patients;
+  return (
+    <div className="flex-1 overflow-y-auto px-6 pt-5 pb-8">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-base text-[#7A6F6A] font-semibold" style={{ fontFamily:"DM Sans, sans-serif" }}>{today}</p>
+        <div className="flex items-center gap-2">
+          <button onClick={onSettings} className="w-9 h-9 rounded-xl bg-[#F5EDE0] flex items-center justify-center active:scale-90 transition-all"><Settings size={17} className="text-[#7A6F6A]"/></button>
+          <button onClick={()=>setConfirmSignOut(true)} className="px-3 py-1.5 rounded-xl bg-[#F5EDE0] text-[#7A6F6A] hover:bg-[#FEE8E8] hover:text-[#D4183D] transition-all text-xs font-bold" style={{ fontFamily:"Nunito, sans-serif" }}>Sign out</button>
+        </div>
+      </div>
+      <h1 className="text-4xl font-black text-[#1C1A2E] leading-tight mt-3 mb-1" style={{ fontFamily:"Nunito, sans-serif" }}>Hi {name}!</h1>
+      <p className="text-base text-[#7A6F6A] font-semibold mb-5" style={{ fontFamily:"DM Sans, sans-serif" }}>{patients.length>0?"Who would you like to help today?":"Add someone to get started."}</p>
+      {patients.length>0&&(
+        <div className="relative mb-5">
+          <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#C9BDB5]"/>
+          <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search people"
+            className="w-full bg-[#F5EDE0] rounded-2xl pl-11 pr-10 py-3.5 text-base font-semibold text-[#1C1A2E] outline-none placeholder:text-[#C9BDB5] focus:ring-2 focus:ring-[#E8623A]/40" style={{ fontFamily:"DM Sans, sans-serif" }}/>
+          {query&&<button onClick={()=>setQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-[#E8D5C4]/60 flex items-center justify-center active:scale-90"><X size={14} className="text-[#7A6F6A]" strokeWidth={2.5}/></button>}
+        </div>
+      )}
+      <p className="text-xs font-bold text-[#7A6F6A] uppercase tracking-widest mb-3" style={{ fontFamily:"DM Sans, sans-serif" }}>People you support</p>
+      <div className="space-y-3">
+        {filtered.length===0&&(
+          <div className="py-10 text-center">
+            <p className="text-base font-bold text-[#7A6F6A]" style={{ fontFamily:"DM Sans, sans-serif" }}>No people match "{query}"</p>
+          </div>
+        )}
+        {filtered.map(p=>{
+          const ts=patientData[p.id]?.tasks??[];
+          const total=ts.length;
+          const todo=ts.filter(t=>!(t.steps.length>0&&t.steps.every(s=>s.completed))).length;
+          const initials=(p.firstName[0]+(p.lastName?.[0]??"")).toUpperCase();
+          return (
+            <button key={p.id} onClick={()=>onOpenPatient(p.id)} className="w-full bg-white rounded-[1.75rem] p-4 flex items-center gap-4 text-left shadow-sm border border-black/[0.06] active:scale-[0.98] transition-transform">
+              <div className="w-14 h-14 rounded-full flex items-center justify-center flex-shrink-0" style={{ background:p.avatarColor }}>
+                <span className="text-xl font-black text-white" style={{ fontFamily:"Nunito, sans-serif" }}>{initials}</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xl font-black text-[#1C1A2E] truncate" style={{ fontFamily:"Nunito, sans-serif" }}>{p.firstName}{p.lastName?` ${p.lastName}`:""}</p>
+                <p className="text-sm text-[#7A6F6A] font-semibold mt-0.5" style={{ fontFamily:"DM Sans, sans-serif" }}>{total===0?"No tasks yet":`${total} task${total!==1?"s":""} · ${todo} to do`}</p>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 18 18" fill="none"><path d="M7 5l4 4-4 4" stroke="#E8623A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={onAddPatient} className="w-full mt-4 py-5 rounded-[1.75rem] border-2 border-dashed border-[#E8623A]/40 flex items-center justify-center gap-3 text-[#E8623A] font-black text-lg hover:border-[#E8623A]/70 hover:bg-[#E8623A]/5 transition-all active:scale-[0.98]" style={{ fontFamily:"Nunito, sans-serif" }}>
+        <UserPlus size={22} strokeWidth={2.5}/> Add a person
+      </button>
+      {patients.length>0&&(
+        <button onClick={onReportAll} className="w-full mt-3 py-4 rounded-[1.75rem] bg-white border border-black/[0.06] shadow-sm flex items-center justify-center gap-2.5 text-[#1C1A2E] font-black text-base active:scale-[0.98] transition-transform" style={{ fontFamily:"Nunito, sans-serif" }}>
+          <FileText size={19} strokeWidth={2.5} style={{ color:"#E8623A" }}/> Report for everyone
+        </button>
+      )}
+      {confirmSignOut && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background:"rgba(0,0,0,0.4)" }}>
+          <div className="w-full bg-white rounded-t-[2rem] p-6 space-y-4" style={{ maxWidth:390 }}>
+            <p className="text-2xl font-black text-[#1C1A2E] text-center" style={{ fontFamily:"Nunito, sans-serif" }}>Sign out?</p>
+            <p className="text-base text-[#7A6F6A] text-center" style={{ fontFamily:"DM Sans, sans-serif" }}>You will need to sign in again next time.</p>
+            <button onClick={()=>{setConfirmSignOut(false);onSignOut();}} className="w-full py-4 rounded-2xl font-black text-lg text-white active:scale-[0.98]" style={{ background:"#D4183D", fontFamily:"Nunito, sans-serif" }}>Yes, sign out</button>
+            <button onClick={()=>setConfirmSignOut(false)} className="w-full py-4 rounded-2xl font-black text-lg text-[#1C1A2E] bg-[#F5EDE0] active:scale-[0.98]" style={{ fontFamily:"Nunito, sans-serif" }}>Stay signed in</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CaregiverOverviewScreen({ patient, tasks, categories, showCaregiverTags=true, onBack, onManage, onOpenTask, onReport }: {
+  patient:Patient; tasks:Task[]; categories:Category[]; showCaregiverTags?:boolean; onBack:()=>void; onManage:()=>void; onOpenTask:(id:number)=>void; onReport:()=>void;
+}) {
+  const today=new Date();
+  const counts={ todo:0, overdue:0, done:0, skipped:0 };
+  let totalSteps=0, doneSteps=0;
+  const withStatus=tasks.map(t=>{
+    const st=computeTaskStatus(t,today);
+    counts[st]++;
+    if(st!=="skipped"){ totalSteps+=t.steps.length; doneSteps+=t.steps.filter(s=>s.completed).length; }
+    return { task:t, status:st };
+  });
+  const pct=totalSteps?Math.round((doneSteps/totalSteps)*100):0;
+  const initials=(patient.firstName[0]+(patient.lastName?.[0]??"")).toUpperCase();
+  const STAT_ORDER:TaskStatus[]=["todo","overdue","done","skipped"];
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-shrink-0 flex items-center gap-3 px-5 pt-4 pb-4" style={{ background:patient.avatarColor+"22" }}>
+        <button onClick={onBack} className="w-12 h-12 rounded-2xl bg-white/80 border border-black/[0.08] flex items-center justify-center shadow-sm flex-shrink-0"><ArrowLeft size={22} className="text-[#1C1A2E]"/></button>
+        <div className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0" style={{ background:patient.avatarColor }}>
+          <span className="text-lg font-black text-white" style={{ fontFamily:"Nunito, sans-serif" }}>{initials}</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl font-black text-[#1C1A2E] truncate leading-tight" style={{ fontFamily:"Nunito, sans-serif" }}>{patient.firstName}{patient.lastName?` ${patient.lastName}`:""}</h1>
+          <p className="text-sm text-[#7A6F6A] font-semibold" style={{ fontFamily:"DM Sans, sans-serif" }}>{tasks.length} task{tasks.length!==1?"s":""} · {pct}% complete</p>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto px-5 pt-4 pb-6">
+        <p className="text-xs font-bold text-[#7A6F6A] uppercase tracking-widest mb-2" style={{ fontFamily:"DM Sans, sans-serif" }}>At a glance</p>
+        <div className="flex gap-2 mb-4">
+          {STAT_ORDER.map(st=>(
+            <div key={st} className="flex-1 bg-white rounded-[1.25rem] border border-black/[0.06] shadow-sm px-1.5 py-3.5 text-center">
+              <p className="text-2xl font-black leading-none" style={{ color:STATUS_META[st].color, fontFamily:"Nunito, sans-serif" }}>{counts[st]}</p>
+              <p className="text-[10px] font-bold text-[#7A6F6A] mt-1.5 uppercase tracking-wide" style={{ fontFamily:"DM Sans, sans-serif" }}>{STATUS_META[st].label}</p>
+            </div>
+          ))}
+        </div>
+        <div className="bg-white rounded-[1.5rem] border border-black/[0.06] shadow-sm p-5 mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>Overall progress</p>
+            <p className="text-sm font-black" style={{ color:pct===100?"#3DB8AD":"#E8623A", fontFamily:"Nunito, sans-serif" }}>{pct}%</p>
+          </div>
+          <div className="h-2.5 bg-[#F5EDE0] rounded-full overflow-hidden"><div className="h-full rounded-full transition-all duration-500" style={{ width:`${pct}%`, background:pct===100?"#3DB8AD":"#E8623A" }}/></div>
+          <p className="text-xs text-[#7A6F6A] font-semibold mt-2" style={{ fontFamily:"DM Sans, sans-serif" }}>{doneSteps} of {totalSteps} steps completed</p>
+        </div>
+        <div className="flex gap-3 mb-5">
+          <button onClick={onManage} className="flex-1 py-4 rounded-[1.5rem] font-black text-base text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-transform shadow-sm" style={{ background:"linear-gradient(135deg,#E8623A,#F07B3A)", fontFamily:"Nunito, sans-serif" }}>
+            <ClipboardList size={19} strokeWidth={2.5}/> Manage tasks
+          </button>
+          <button onClick={onReport} className="flex-1 py-4 rounded-[1.5rem] font-black text-base flex items-center justify-center gap-2 active:scale-[0.98] transition-transform bg-white border-2 border-[#E8623A] text-[#E8623A]" style={{ fontFamily:"Nunito, sans-serif" }}>
+            <FileText size={19} strokeWidth={2.5}/> Report
+          </button>
+        </div>
+        <p className="text-xs font-bold text-[#7A6F6A] uppercase tracking-widest mb-3" style={{ fontFamily:"DM Sans, sans-serif" }}>Tasks</p>
+        {tasks.length===0?(
+          <div className="py-10 text-center">
+            <p className="text-base font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>No tasks yet</p>
+            <p className="text-sm text-[#7A6F6A] mt-1" style={{ fontFamily:"DM Sans, sans-serif" }}>Tap "Manage tasks" to add one</p>
+          </div>
+        ):(
+          <div className="space-y-3">
+            {withStatus.map(({task,status})=>{
+              const cat=categories.find(c=>c.id===task.category);
+              const done=task.steps.filter(s=>s.completed).length;const total=task.steps.length;
+              return (
+                <button key={task.id} onClick={()=>onOpenTask(task.id)} className="w-full bg-white rounded-[1.5rem] border border-black/[0.06] shadow-sm overflow-hidden flex items-center text-left active:scale-[0.98] transition-transform">
+                  {cat&&<div className="w-1.5 self-stretch flex-shrink-0" style={{ background:cat.color }}/>}
+                  <div className="flex-1 min-w-0 p-4">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-base font-black text-[#1C1A2E]" style={{ fontFamily:"Nunito, sans-serif" }}>{task.title}</p>
+                      {task.caregiverEdited&&showCaregiverTags&&<CaregiverTag/>}{task.skipped&&<SkippedTag/>}
+                    </div>
+                    <p className="text-xs text-[#7A6F6A] font-semibold mt-0.5" style={{ fontFamily:"DM Sans, sans-serif" }}>{total===0?"No steps":`${done}/${total} steps`}</p>
+                  </div>
+                  <span className="px-2.5 h-6 rounded-full flex items-center mr-3 flex-shrink-0" style={{ background:STATUS_META[status].color }}>
+                    <span className="text-[11px] font-black text-white" style={{ fontFamily:"Nunito, sans-serif" }}>{STATUS_META[status].label}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CaregiverAddPatientScreen({ onBack, onLink }: { onBack:()=>void; onLink:(first:string,last?:string)=>void; }) {
+  const [first,setFirst]=useState("");const [last,setLast]=useState("");const [code,setCode]=useState("");
+  const codeOk=/\S+@\S+\.\S+/.test(code.trim())||code.trim().length>=6;
+  const codeInvalid=code.trim().length>0&&!codeOk;
+  const canLink=first.trim()&&codeOk;
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-shrink-0 flex items-center gap-3 px-5 pt-4 pb-3">
+        <button onClick={onBack} className="w-12 h-12 rounded-2xl bg-white border border-black/[0.08] flex items-center justify-center shadow-sm"><ArrowLeft size={22} className="text-[#1C1A2E]"/></button>
+        <h1 className="text-2xl font-black text-[#1C1A2E] flex-1" style={{ fontFamily:"Nunito, sans-serif" }}>Add a person</h1>
+      </div>
+      <div className="flex-1 flex flex-col px-6 pt-3 pb-4 overflow-y-auto">
+        <div className="bg-white rounded-[1.75rem] p-5 border border-black/[0.06] flex items-start gap-3 mb-5">
+          <div className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ background:"#EBF9F8" }}><Heart size={20} style={{ color:"#3DB8AD" }} strokeWidth={2.2}/></div>
+          <p className="flex-1 text-sm text-[#7A6F6A] font-semibold leading-relaxed" style={{ fontFamily:"DM Sans, sans-serif" }}>Link someone you support using their email or the invite code from their CanPlan app.</p>
+        </div>
+        <div className="space-y-4">
+          <AuthField label="Their first name" placeholder="e.g. Jordan" value={first} onChange={setFirst}/>
+          <AuthField label="Their last name (optional)" placeholder="e.g. Lee" value={last} onChange={setLast}/>
+          <div className="space-y-1">
+            <AuthField label="Email or invite code" placeholder="e.g. jordan@email.com" value={code} onChange={setCode}/>
+            {codeInvalid&&<p className="text-sm font-semibold text-[#D4183D] px-1" style={{ fontFamily:"DM Sans, sans-serif" }}>Enter a valid email or a code of at least 6 characters</p>}
+          </div>
+        </div>
+        <div className="flex-1 min-h-6"/>
+        <button onClick={()=>canLink&&onLink(first.trim(),last.trim()||undefined)} disabled={!canLink} className="w-full py-5 rounded-[1.75rem] font-black text-xl text-white transition-all active:scale-[0.98]" style={{ background:canLink?"linear-gradient(135deg,#E8623A,#F07B3A)":"#C9BDB5", fontFamily:"Nunito, sans-serif", cursor:canLink?"pointer":"not-allowed" }}>Link this person</button>
       </div>
     </div>
   );

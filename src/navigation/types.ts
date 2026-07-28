@@ -33,20 +33,38 @@ export type OnboardingStackParamList = {
 
 export type MainStackParamList = {
   Home: undefined;
-  Calendar: undefined;
+  /**
+   * Caregiver (SUPPORT_PERSON) landing: the list of linked primary users. The
+   * initial Main-stack route when the signed-in profile's role is
+   * SUPPORT_PERSON (see App.tsx).
+   */
+  CaregiverHome: undefined;
+  /** Caregiver drill-in for one linked primary user (reports/tasks/categories/calendar). */
+  PatientOverview: { userId: string; displayName: string };
+  /** With `ownerId` (caregiver delegated): a linked primary user's calendar. */
+  Calendar: { ownerId?: string; managingName?: string } | undefined;
   Settings: undefined;
   Interface: undefined;
   Notifications: undefined;
   AudioSpeech: undefined;
   Statistics: undefined;
   PrivacyPolicy: undefined;
-  Categories: undefined;
+  /** With `ownerId` (caregiver delegated): a linked primary user's categories. */
+  Categories: { ownerId?: string; managingName?: string } | undefined;
   /**
    * Without params: all of the owner's tasks. With `categoryId`: only tasks in
    * that category (the back button returns to Categories; `categoryName` titles
-   * the screen).
+   * the screen). With `ownerId` (caregiver delegated): a linked primary user's
+   * tasks, with a "Managing {managingName}" banner.
    */
-  AllTasks: { categoryId?: string; categoryName?: string } | undefined;
+  AllTasks:
+    | {
+        categoryId?: string;
+        categoryName?: string;
+        ownerId?: string;
+        managingName?: string;
+      }
+    | undefined;
   ManageTasks: undefined;
   /**
    * View a task's steps. With the optional occurrence fields it runs as an
@@ -65,6 +83,9 @@ export type MainStackParamList = {
     status?: TaskInstanceStatus;
     /** Set by the step player as it pages, so the list re-centres on return. */
     focusStepId?: string;
+    /** Caregiver delegated: run against a linked primary user's occurrence. */
+    ownerId?: string;
+    managingName?: string;
   };
   TaskDetail: { taskId: string };
   /** Single-step focus view. Occurrence fields enable the done/undo toggle. */
@@ -78,6 +99,9 @@ export type MainStackParamList = {
     instanceId?: string;
     /** Occurrence status — completed/skipped render the step read-only. */
     status?: TaskInstanceStatus;
+    /** Caregiver delegated: the occurrence belongs to a linked primary user. */
+    ownerId?: string;
+    managingName?: string;
   };
   /**
    * `fixedCategoryId` pins the new task to one category and hides the category
@@ -91,14 +115,31 @@ export type MainStackParamList = {
         fixedCategoryName?: string;
         /** After creating a brand-new task, continue to scheduling it. */
         scheduleAfterCreate?: boolean;
+        /**
+         * Caregiver delegated: create the new task under a linked primary user
+         * (editing an existing task derives the owner from the task itself).
+         */
+        ownerId?: string;
+        managingName?: string;
       }
     | undefined;
   CreateTaskStep: { taskId: string; stepId?: string };
   ReorderSteps: { taskId: string };
-  /** Pick an existing task to schedule onto the calendar. */
-  SelectTask: undefined;
-  /** Create a TaskAssignment (date/time/repeat) for an existing task. */
-  ScheduleAssignment: { taskId: string; taskTitle?: string };
+  /**
+   * Pick an existing task to schedule onto the calendar. With `ownerId`
+   * (caregiver delegated): pick from a linked primary user's tasks.
+   */
+  SelectTask: { ownerId?: string; managingName?: string } | undefined;
+  /**
+   * Create a TaskAssignment (date/time/repeat) for an existing task. With
+   * `ownerId` (caregiver delegated): schedule under a linked primary user.
+   */
+  ScheduleAssignment: {
+    taskId: string;
+    taskTitle?: string;
+    ownerId?: string;
+    managingName?: string;
+  };
   /** One occurrence (from the calendar feed) — view details and delete. */
   OccurrenceDetail: {
     assignmentId: string;
@@ -108,6 +149,9 @@ export type MainStackParamList = {
     scheduledTime: string;
     status: TaskInstanceStatus;
     isVirtual: boolean;
+    /** Caregiver delegated: the occurrence belongs to a linked primary user. */
+    ownerId?: string;
+    managingName?: string;
   };
   /** Supporter-only: pick which cared-for user's reports to view. */
   ReportPeople: undefined;

@@ -29,6 +29,8 @@ import VerifyEmailScreen from './src/screens/auth/VerifyEmailScreen';
 import AudioSpeechSettingsScreen from './src/screens/AudioSpeechSettingsScreen';
 import CalendarScreen from './src/screens/CalendarScreen';
 import HomeScreen from './src/screens/HomeScreen';
+import CaregiverHomeScreen from './src/screens/caregiver/CaregiverHomeScreen';
+import PatientOverviewScreen from './src/screens/caregiver/PatientOverviewScreen';
 import InterfaceSettingsScreen from './src/screens/InterfaceSettingsScreen';
 import NotificationsSettingsScreen from './src/screens/NotificationsSettingsScreen';
 import PrivacyPolicySettingsScreen from './src/screens/PrivacyPolicySettingsScreen';
@@ -69,7 +71,14 @@ function RootStack() {
   const { isGuest } = useSession();
   // Only fetch the profile when a real user is signed in — in guest mode
   // there is no Cognito identity to query.
-  const { data: profile, isLoading: profileLoading } = useMyProfile({
+  // `isPending` (not `isLoading`) is intentional: isLoading is
+  // `isPending && isFetching`, which briefly goes false in the render where
+  // this query flips from disabled → enabled (currentUser just resolved) but
+  // the fetch hasn't started, so `profile` is still undefined. Gating on that
+  // would mount the navigator — and capture `initialRouteName` — off a
+  // not-yet-loaded profile, landing a SUPPORT_PERSON on Home instead of
+  // CaregiverHome. `isPending` stays true until the profile actually resolves.
+  const { data: profile, isPending: profilePending } = useMyProfile({
     enabled: !!currentUser && !isGuest,
   });
   // Simple Mode + starting page come from the locally persisted interface
@@ -82,8 +91,10 @@ function RootStack() {
     return <Splash />;
   }
   // Real user signed in but the profile fetch hasn't completed yet — wait
-  // so we don't briefly flash the Onboarding screen for existing users.
-  if (currentUser && !isGuest && profileLoading) {
+  // so we don't briefly flash the Onboarding screen for existing users, and
+  // so the navigator's initialRouteName is computed from a resolved profile
+  // (see the isPending note above).
+  if (currentUser && !isGuest && profilePending) {
     return <Splash />;
   }
 
@@ -94,9 +105,13 @@ function RootStack() {
     <Stack.Navigator
       screenOptions={{ headerShown: false }}
       initialRouteName={
-        interfaceSettings.simpleMode
-          ? startingPageRouteName(interfaceSettings.startingPage)
-          : 'Home'
+        // Caregivers land on their own dashboard (list of linked primary users);
+        // role comes from the real profile, so there is no manual role chooser.
+        profile?.role === 'SUPPORT_PERSON'
+          ? 'CaregiverHome'
+          : interfaceSettings.simpleMode
+            ? startingPageRouteName(interfaceSettings.startingPage)
+            : 'Home'
       }
     >
       {!isAuthed ? (
@@ -115,6 +130,8 @@ function RootStack() {
       ) : (
         <>
           <Stack.Screen name="Home" component={HomeScreen} />
+          <Stack.Screen name="CaregiverHome" component={CaregiverHomeScreen} />
+          <Stack.Screen name="PatientOverview" component={PatientOverviewScreen} />
           <Stack.Screen name="Calendar" component={CalendarScreen} />
           <Stack.Screen name="Settings" component={SettingsScreen} />
           <Stack.Screen name="Interface" component={InterfaceSettingsScreen} />

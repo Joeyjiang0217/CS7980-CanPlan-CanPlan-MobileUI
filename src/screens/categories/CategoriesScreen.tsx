@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -40,11 +40,19 @@ export default function CategoriesScreen() {
   const openSettings = useCallback(() => navigation.navigate('Settings'), [navigation]);
   const { handleSettingsTap, settingsHint } = useSettingsTapGate(openSettings);
   const insets = useSafeAreaInsets();
+  const route = useRoute<RouteProp<MainStackParamList, 'Categories'>>();
 
-  const [ownerId, setOwnerId] = useState('');
+  // Caregiver delegated management of a linked primary user's categories. The
+  // caregiver's own Simple Mode must not shape a delegated view.
+  const managedOwnerId = route.params?.ownerId;
+  const managingName = route.params?.managingName;
+  const managed = Boolean(managedOwnerId);
+  const showSimple = simpleMode && !managed;
+
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [identityError, setIdentityError] = useState<string>();
 
-  const categoriesQuery = useMyCategories();
+  const categoriesQuery = useMyCategories(true, 50, managedOwnerId);
   const tasksQuery = useTasksByOwner(ownerId);
 
   const createMutation = useCreateCategory();
@@ -55,6 +63,11 @@ export default function CategoriesScreen() {
   const [editing, setEditing] = useState<Category | null>(null);
 
   useEffect(() => {
+    // Managed mode: the owner is the primary user from the route.
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
     void getCurrentUserId()
       .then((userId) => mounted && setOwnerId(userId))
@@ -67,7 +80,7 @@ export default function CategoriesScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   // Pull every task page so the per-category counts are complete.
   useEffect(() => {
@@ -118,7 +131,7 @@ export default function CategoriesScreen() {
   const handleSubmit = (values: CategoryFormValues) => {
     if (formMode === 'create') {
       createMutation.mutate(
-        { name: values.name, color: values.color, sortOrder: nextSortOrder },
+        { name: values.name, color: values.color, sortOrder: nextSortOrder, userId: managedOwnerId },
         { onSuccess: closeForm, onError: reportError },
       );
       return;
@@ -127,6 +140,7 @@ export default function CategoriesScreen() {
       updateMutation.mutate(
         {
           categoryId: editing.categoryId,
+          userId: managedOwnerId,
           color: values.color,
           // The default category's name can't be changed — only send it otherwise.
           ...(editing.isDefault ? {} : { name: values.name }),
@@ -140,7 +154,7 @@ export default function CategoriesScreen() {
     if (!editing || editing.isDefault) return;
     Alert.alert(
       'Delete category?',
-      `"${editing.name}" will be removed. Any tasks in it move to your default category.`,
+      `"${editing.name}" will be removed. Any tasks in it move to the default category.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -148,7 +162,7 @@ export default function CategoriesScreen() {
           style: 'destructive',
           onPress: () =>
             deleteMutation.mutate(
-              { categoryId: editing.categoryId },
+              { categoryId: editing.categoryId, userId: managedOwnerId },
               { onSuccess: closeForm, onError: reportError },
             ),
         },
@@ -163,13 +177,13 @@ export default function CategoriesScreen() {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        {!simpleMode ? (
+        {!showSimple ? (
           <BackButton onPress={() => navigation.goBack()} variant="dark" />
         ) : (
           // Invisible mirror of the settings gear so the title centers.
           <View style={styles.headerSpacer} />
         )}
-        {simpleMode && settingsHint ? (
+        {showSimple && settingsHint ? (
           <Text accessibilityRole="header" numberOfLines={1} style={styles.headerHint}>
             {settingsHint}
           </Text>
@@ -177,12 +191,12 @@ export default function CategoriesScreen() {
           <Text
             accessibilityRole="header"
             numberOfLines={1}
-            style={[styles.headerTitle, simpleMode ? styles.headerTitleCentered : null]}
+            style={[styles.headerTitle, showSimple ? styles.headerTitleCentered : null]}
           >
             Categories
           </Text>
         )}
-        {simpleMode ? (
+        {showSimple ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Settings"
@@ -194,6 +208,14 @@ export default function CategoriesScreen() {
           </Pressable>
         ) : null}
       </View>
+
+      {managed && managingName ? (
+        <View style={styles.managingBanner}>
+          <Text style={styles.managingBannerText} numberOfLines={1}>
+            Managing {managingName}
+          </Text>
+        </View>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={[
@@ -250,7 +272,7 @@ export default function CategoriesScreen() {
                       </View>
                       <Ionicons name="chevron-forward" size={22} color={colors.disabled} />
                     </Pressable>
-                    {!simpleMode ? (
+                    {!showSimple ? (
                       <>
                         <View style={styles.editDivider} />
                         <Pressable
@@ -276,7 +298,7 @@ export default function CategoriesScreen() {
           </View>
         ) : null}
 
-        {!error && !categoriesQuery.isLoading && !simpleMode ? (
+        {!error && !categoriesQuery.isLoading && !showSimple ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add a category"
@@ -338,6 +360,17 @@ const styles = StyleSheet.create({
   },
   headerSpacer: {
     width: 44,
+  },
+  // Delegated context strip — mirrors the caregiver overview "Managing {name}".
+  managingBanner: {
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.md,
+    backgroundColor: colors.surfaceWarm,
+  },
+  managingBannerText: {
+    ...typography.bodyStrong,
+    color: colors.text,
+    textAlign: 'center',
   },
   // 3-tap settings hint — same look as the simple All Tasks header prompt.
   headerHint: {

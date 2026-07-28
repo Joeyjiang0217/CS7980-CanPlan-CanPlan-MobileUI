@@ -202,6 +202,8 @@ export default function StepDetailScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const { taskId, stepId, assignmentId, scheduledDate, scheduledTime, status } = route.params;
   const instanceId = route.params.instanceId;
+  // Caregiver delegated: the occurrence belongs to a linked primary user.
+  const managedOwnerId = route.params.ownerId;
 
   const isInstance = Boolean(assignmentId && scheduledDate && scheduledTime);
   // Toggling needs a materialized instance (started from the calendar), and
@@ -221,13 +223,17 @@ export default function StepDetailScreen() {
   // snapshot is the source of truth. The runner player pages through steps in
   // place, so optimistic flips are kept per step id rather than for a single
   // route-pinned step.
-  const [ownerId, setOwnerId] = useState('');
+  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const [saveError, setSaveError] = useState<string>();
   const savingStepsRef = useRef<Set<string>>(new Set());
   const stepToggle = useSetInstanceStepCompletion();
 
   useEffect(() => {
+    if (managedOwnerId) {
+      setOwnerId(managedOwnerId);
+      return;
+    }
     let mounted = true;
     void getCurrentUserId().then((id) => {
       if (mounted) {
@@ -237,7 +243,7 @@ export default function StepDetailScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [managedOwnerId]);
 
   const instanceStepsQuery = useInstanceSteps(ownerId, instanceId ?? '');
   const serverCompletedByStep = useMemo(() => {
