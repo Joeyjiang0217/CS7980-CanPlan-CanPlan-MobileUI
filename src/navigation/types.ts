@@ -116,28 +116,32 @@ export type MainStackParamList = {
         /** After creating a brand-new task, continue to scheduling it. */
         scheduleAfterCreate?: boolean;
         /**
-         * Caregiver delegated: create the new task under a linked primary user
-         * (editing an existing task derives the owner from the task itself).
+         * Caregiver delegated: the new template is still authored under the
+         * caregiver (owner-of-template), but after creating it we schedule it
+         * FOR this linked primary user (`createTaskAssignment.userId`).
          */
-        ownerId?: string;
+        assignForUserId?: string;
         managingName?: string;
       }
     | undefined;
   CreateTaskStep: { taskId: string; stepId?: string };
   ReorderSteps: { taskId: string };
   /**
-   * Pick an existing task to schedule onto the calendar. With `ownerId`
-   * (caregiver delegated): pick from a linked primary user's tasks.
+   * Pick an existing task to schedule onto the calendar. Always lists the
+   * caller's OWN templates. With `assignForUserId` (caregiver delegated): the
+   * chosen template is scheduled FOR a linked primary user.
    */
-  SelectTask: { ownerId?: string; managingName?: string } | undefined;
+  SelectTask: { assignForUserId?: string; managingName?: string } | undefined;
   /**
-   * Create a TaskAssignment (date/time/repeat) for an existing task. With
-   * `ownerId` (caregiver delegated): schedule under a linked primary user.
+   * Create a TaskAssignment (date/time/repeat) for an existing task. The
+   * `taskId` template is always owned by the caller. With `assignForUserId`
+   * (caregiver delegated): the assignment's `userId` is that linked primary
+   * user rather than the caller.
    */
   ScheduleAssignment: {
     taskId: string;
     taskTitle?: string;
-    ownerId?: string;
+    assignForUserId?: string;
     managingName?: string;
   };
   /** One occurrence (from the calendar feed) — view details and delete. */

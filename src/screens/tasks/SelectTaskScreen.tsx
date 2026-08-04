@@ -21,21 +21,18 @@ export default function SelectTaskScreen() {
   const route = useRoute<SelectTaskRoute>();
   const insets = useSafeAreaInsets();
 
-  // Caregiver delegated: pick from a linked primary user's tasks.
-  const managedOwnerId = route.params?.ownerId;
+  // Always list the caller's OWN templates. Delegated (assignForUserId set): the
+  // chosen template is then scheduled FOR that linked primary user.
+  const assignForUserId = route.params?.assignForUserId;
   const managingName = route.params?.managingName;
-  const managed = Boolean(managedOwnerId);
+  const managed = Boolean(assignForUserId);
 
-  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
+  const [ownerId, setOwnerId] = useState('');
   const [identityError, setIdentityError] = useState<string>();
   const tasksQuery = useTasksByOwner(ownerId);
   const categoriesQuery = useMyCategories(Boolean(ownerId), 50, ownerId);
 
   useEffect(() => {
-    if (managedOwnerId) {
-      setOwnerId(managedOwnerId);
-      return;
-    }
     let mounted = true;
     void getCurrentUserId()
       .then((id) => {
@@ -53,7 +50,7 @@ export default function SelectTaskScreen() {
     return () => {
       mounted = false;
     };
-  }, [managedOwnerId]);
+  }, []);
 
   const tasks = useMemo(
     () => tasksQuery.data?.pages.flatMap((page) => page.items) ?? [],
@@ -122,7 +119,7 @@ export default function SelectTaskScreen() {
                 navigation.navigate('ScheduleAssignment', {
                   taskId: task.taskId,
                   taskTitle: task.title,
-                  ownerId: managedOwnerId,
+                  assignForUserId,
                   managingName,
                 })
               }

@@ -235,11 +235,12 @@ export default function CreateTaskScreen() {
   const existingTaskId = route.params?.taskId;
   const fixedCategoryId = route.params?.fixedCategoryId;
   const fixedCategoryName = route.params?.fixedCategoryName;
-  // Caregiver delegated: create the new task under a linked primary user
-  // (editing an existing task derives the owner from the task itself).
-  const managedOwnerId = route.params?.ownerId;
+  // Caregiver delegated schedule: the template is still authored under the
+  // caregiver (owner-of-template); after creating it we schedule it FOR this
+  // linked primary user. `managingName` drives the context banner.
+  const assignForUserId = route.params?.assignForUserId;
   const managingName = route.params?.managingName;
-  const managed = Boolean(managedOwnerId) && !existingTaskId;
+  const delegatedSchedule = Boolean(assignForUserId) && !existingTaskId;
   // Interface setting: with categories disabled the picker is replaced by a
   // hint; an existing categoryId is left untouched on save.
   const { useCategories } = useInterfaceSettings();
@@ -276,7 +277,7 @@ export default function CreateTaskScreen() {
   const [coverPreviewUri, setCoverPreviewUri] = useState<string>();
   const [coverNeedsUpload, setCoverNeedsUpload] = useState(false);
   const [steps, setSteps] = useState<DraftStep[]>([]);
-  const [categoryOwnerId, setCategoryOwnerId] = useState(managed ? (managedOwnerId ?? '') : '');
+  const [categoryOwnerId, setCategoryOwnerId] = useState('');
   // Pre-pin to the fixed category when creating from a category view.
   const [categoryId, setCategoryId] = useState<string | undefined>(fixedCategoryId);
   const [savedCategoryId, setSavedCategoryId] = useState<string>();
@@ -389,11 +390,8 @@ export default function CreateTaskScreen() {
   }, [coverImage, existingCoverQuery.data?.downloadUrl]);
 
   useEffect(() => {
-    // Delegated create: the owner is the linked primary user from the route.
-    if (managed && managedOwnerId) {
-      setCategoryOwnerId(managedOwnerId);
-      return;
-    }
+    // The template is always authored under the caller (owner-of-template),
+    // even in the delegated schedule flow — so categories are the caller's own.
     let mounted = true;
 
     void getCurrentUserId()
@@ -409,7 +407,7 @@ export default function CreateTaskScreen() {
     return () => {
       mounted = false;
     };
-  }, [managed, managedOwnerId]);
+  }, []);
 
   const beginTaskOperation = (action: string) => {
     taskOperationRef.current = action;
@@ -436,7 +434,6 @@ export default function CreateTaskScreen() {
       const createdTask = await createTaskMutation.mutateAsync({
         title: taskTitle,
         ...(categoryId ? { categoryId } : {}),
-        ...(managed && managedOwnerId ? { userId: managedOwnerId } : {}),
       });
       if (!createdTask) {
         throw new Error('Task creation returned no task. Please try again.');
@@ -508,7 +505,7 @@ export default function CreateTaskScreen() {
         navigation.replace('ScheduleAssignment', {
           taskId,
           taskTitle: title.trim() || undefined,
-          ownerId: managedOwnerId,
+          assignForUserId,
           managingName,
         });
       } else {
@@ -927,7 +924,7 @@ export default function CreateTaskScreen() {
         </Pressable>
       </View>
 
-      {managed && managingName ? (
+      {delegatedSchedule && managingName ? (
         <Text style={styles.managingBanner} numberOfLines={1}>
           Managing {managingName}
         </Text>
