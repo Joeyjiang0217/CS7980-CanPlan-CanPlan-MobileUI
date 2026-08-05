@@ -343,35 +343,35 @@ export default function ScheduleAssignmentScreen() {
   const route = useRoute<ScheduleAssignmentRoute>();
   const insets = useSafeAreaInsets();
   const { taskId, taskTitle } = route.params;
-  // Caregiver delegated: schedule under a linked primary user.
-  const managedOwnerId = route.params.ownerId;
+  // The `taskId` template is always owned by the caller. Caregiver delegated
+  // (assignForUserId set): the assignment's `userId` is that linked primary user.
+  const assignForUserId = route.params.assignForUserId;
   const managingName = route.params.managingName;
-  const managed = Boolean(managedOwnerId);
+  const managed = Boolean(assignForUserId);
 
   const createAssignment = useCreateAssignment();
 
-  const [ownerId, setOwnerId] = useState(managedOwnerId ?? '');
+  const [selfId, setSelfId] = useState('');
   const [date, setDate] = useState(() => startOfDay(new Date()));
   const [time, setTime] = useState<string>();
   const [repeat, setRepeat] = useState<RepeatValue>('NONE');
   const [activeSheet, setActiveSheet] = useState<'date' | 'time' | 'repeat'>();
   const [inlineError, setInlineError] = useState<string>();
 
+  // Who the assignment is scheduled for: the patient when delegated, else self.
+  const assignUserId = assignForUserId ?? selfId;
+
   useEffect(() => {
-    if (managedOwnerId) {
-      setOwnerId(managedOwnerId);
-      return;
-    }
     let mounted = true;
     void getCurrentUserId().then((id) => {
       if (mounted) {
-        setOwnerId(id);
+        setSelfId(id);
       }
     });
     return () => {
       mounted = false;
     };
-  }, [managedOwnerId]);
+  }, []);
 
   const dateLabel = date.toLocaleDateString('en-US', {
     weekday: 'short',
@@ -380,7 +380,7 @@ export default function ScheduleAssignmentScreen() {
     year: 'numeric',
   });
   const repeatLabel = REPEAT_OPTIONS.find((o) => o.value === repeat)?.label ?? 'None';
-  const canSave = Boolean(ownerId) && Boolean(time) && !createAssignment.isPending;
+  const canSave = Boolean(assignUserId) && Boolean(time) && !createAssignment.isPending;
 
   const handleSave = () => {
     if (!time) {
@@ -417,14 +417,14 @@ export default function ScheduleAssignmentScreen() {
       repeat === 'NONE' || !option?.rule
         ? {
             taskId,
-            userId: ownerId,
+            userId: assignUserId,
             scheduleType: 'ONE_TIME',
             scheduledFor: `${dateISO}T${time}:00`,
             timezone,
           }
         : {
             taskId,
-            userId: ownerId,
+            userId: assignUserId,
             scheduleType: 'RECURRING',
             scheduleRule: option.rule,
             startDate: dateISO,
@@ -437,13 +437,13 @@ export default function ScheduleAssignmentScreen() {
         // Reset to a clean stack so Back doesn't land on the now-stale
         // Select/Create step. Delegated: rebuild the caregiver chain so Back
         // returns through the patient overview, not the caregiver's own Home.
-        if (managed && managedOwnerId) {
+        if (managed && assignForUserId) {
           navigation.reset({
             index: 2,
             routes: [
               { name: 'CaregiverHome' },
-              { name: 'PatientOverview', params: { userId: managedOwnerId, displayName: managingName ?? '' } },
-              { name: 'Calendar', params: { ownerId: managedOwnerId, managingName } },
+              { name: 'PatientOverview', params: { userId: assignForUserId, displayName: managingName ?? '' } },
+              { name: 'Calendar', params: { ownerId: assignForUserId, managingName } },
             ],
           });
         } else {

@@ -2355,7 +2355,12 @@ export default function CalendarScreen() {
               accessibilityLabel="Choose an existing task"
               onPress={() => {
                 setAddChoiceVisible(false);
-                navigation.navigate('SelectTask', { ownerId: managedOwnerId, managingName });
+                // Delegated: browse the caregiver's OWN templates, but carry the
+                // patient forward so the assignment is scheduled FOR them.
+                navigation.navigate('SelectTask', {
+                  assignForUserId: managedOwnerId,
+                  managingName,
+                });
               }}
               style={({ pressed }) => [styles.choiceButton, pressed ? styles.choiceButtonPressed : null]}
             >
@@ -2367,9 +2372,11 @@ export default function CalendarScreen() {
               accessibilityLabel="Start from scratch"
               onPress={() => {
                 setAddChoiceVisible(false);
+                // Delegated: author the template under the caregiver (self), then
+                // schedule it FOR the patient.
                 navigation.navigate('CreateTask', {
                   scheduleAfterCreate: true,
-                  ownerId: managedOwnerId,
+                  assignForUserId: managedOwnerId,
                   managingName,
                 });
               }}

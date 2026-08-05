@@ -114,22 +114,6 @@ export default function PatientOverviewScreen() {
             }
           />
           <SectionCard
-            icon="list-outline"
-            title="Tasks"
-            subtitle="View, add, and edit this person's tasks"
-            onPress={() =>
-              navigation.navigate('AllTasks', { ownerId: userId, managingName: displayName })
-            }
-          />
-          <SectionCard
-            icon="grid-outline"
-            title="Categories"
-            subtitle="View and manage this person's categories"
-            onPress={() =>
-              navigation.navigate('Categories', { ownerId: userId, managingName: displayName })
-            }
-          />
-          <SectionCard
             icon="calendar-outline"
             title="Calendar"
             subtitle="View and schedule this person's tasks by date"
