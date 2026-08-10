@@ -24,8 +24,6 @@ export interface InterfaceSettings {
   useCategories: boolean;
   showOverdue: boolean;
   onlyToday: boolean;
-  /** Task icon size slider, 0–100. */
-  iconSizePercent: number;
 }
 
 export const INTERFACE_SETTINGS_DEFAULTS: InterfaceSettings = {
@@ -35,7 +33,6 @@ export const INTERFACE_SETTINGS_DEFAULTS: InterfaceSettings = {
   useCategories: true,
   showOverdue: false,
   onlyToday: false,
-  iconSizePercent: 50,
 };
 
 const STORAGE_KEY = 'canplan.settings.interface';
@@ -76,12 +73,6 @@ function sanitize(stored: unknown): InterfaceSettings {
     if (typeof raw[key] === 'boolean') {
       result[key] = raw[key];
     }
-  }
-  if (
-    typeof raw.iconSizePercent === 'number' &&
-    Number.isFinite(raw.iconSizePercent)
-  ) {
-    result.iconSizePercent = Math.min(100, Math.max(0, raw.iconSizePercent));
   }
   // Coherence: Categories can't be the starting page while categories are
   // disabled (the settings screen enforces this too; this guards old blobs).

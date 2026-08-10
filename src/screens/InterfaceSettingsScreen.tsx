@@ -12,7 +12,6 @@ import {
 } from '../features/settings/interfaceSettings';
 import type { MainStackParamList } from '../navigation/types';
 import BackButton from '../shared/components/BackButton';
-import PercentSlider from '../shared/components/PercentSlider';
 import { colors, radius, shadow, spacing, typography } from '../shared/theme/tokens';
 
 type InterfaceSettingsNavigation = NativeStackNavigationProp<MainStackParamList, 'Interface'>;
@@ -136,23 +135,6 @@ export default function InterfaceSettingsScreen() {
           ))}
         </View>
 
-        <Text style={[styles.sectionLabel, styles.sectionSpacer]}>
-          TASK ICON SIZE — {settings.iconSizePercent}%
-        </Text>
-
-        <View style={styles.card}>
-          <View style={styles.sliderCardContent}>
-            <PercentSlider
-              value={settings.iconSizePercent}
-              onChange={(next) => updateInterfaceSettings({ iconSizePercent: next })}
-              accessibilityLabel="Task icon size"
-            />
-            <View style={styles.sliderLabels}>
-              <Text style={styles.sliderEdgeLabel}>Small</Text>
-              <Text style={styles.sliderEdgeLabel}>Large</Text>
-            </View>
-          </View>
-        </View>
       </ScrollView>
     </View>
   );
@@ -221,19 +203,5 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.border,
     marginHorizontal: spacing.xl,
-  },
-  sliderCardContent: {
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.lg,
-    gap: spacing.sm,
-  },
-  sliderLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: spacing.xs,
-  },
-  sliderEdgeLabel: {
-    ...typography.body,
-    color: colors.textMuted,
   },
 });
