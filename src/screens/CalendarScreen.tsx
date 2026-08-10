@@ -46,6 +46,7 @@ import {
   useOccurrenceResolvedAt,
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
+import { buildDayRows, type DayRow } from '../features/assignments/buildDayRows';
 import {
   bucketOf,
   isResolvedAfterScheduled,
@@ -104,21 +105,6 @@ function initialCalendarTab(): StatusKey {
 }
 
 const NO_PAST_OVERDUE: TaskInstanceView[] = [];
-
-/** "2026-07-13" → "Sunday" (past-week group labels; unique within 7 days). */
-const weekdayName = (iso: string) => {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
-};
-
-/** "2026-07-13" → "Jul 13" (the date suffix on group labels). */
-const monthDay = (iso: string) => {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-  });
-};
 
 const STATUS_TABS: Array<{ key: StatusKey; label: string }> = [
   { key: 'overdue', label: 'Overdue' },
@@ -1425,39 +1411,8 @@ function DayAssignmentsPage({
     return result;
   }, [viewsQuery.data, statusOverrides, activeStatus, minuteTick]);
 
-  // Group the day's occurrences into hour slots (20:00 → "20:00 - 21:00") so
-  // times read as ranges under prominent slot headers.
-  const groups = useMemo(() => {
-    const byHour = new Map<number, TaskInstanceView[]>();
-    for (const view of views) {
-      const hour = Number(view.scheduledTime.split(':')[0]) || 0;
-      const list = byHour.get(hour);
-      if (list) {
-        list.push(view);
-      } else {
-        byHour.set(hour, [view]);
-      }
-    }
-    return [...byHour.entries()].sort((a, b) => a[0] - b[0]);
-  }, [views]);
-
   const isLoading = viewsQuery.isLoading || !ownerId;
   const todayISO = toISODate(today);
-
-  type DayRow =
-    | { kind: 'loading'; key: string }
-    | { kind: 'message'; key: string; message: string }
-    | { kind: 'header'; key: string; hour: number }
-    | {
-        kind: 'dayheader';
-        key: string;
-        dayISO: string;
-        label: string;
-        /** "started/total" for the group, QQ-roster style. */
-        count: string;
-        expanded: boolean;
-      }
-    | { kind: 'task'; key: string; view: TaskInstanceView };
 
   // Collapsible past-day groups: an explicit tap wins; otherwise only the
   // default group is open. Session-only by design (resets on relaunch).
@@ -1472,89 +1427,29 @@ function DayAssignmentsPage({
     });
   }, []);
 
-  const rows = useMemo<DayRow[]>(() => {
-    // Show Overdue mode appends the past week's unresolved occurrences as
-    // collapsible per-day groups, most recent day first (today's own
-    // hour-slot groups stay on top, ungrouped).
-    const pastRows: DayRow[] = [];
-    if (activeStatus === 'overdue' && pastOverdueViews.length > 0) {
-      const byDate = new Map<string, TaskInstanceView[]>();
-      for (const view of pastOverdueViews) {
-        const list = byDate.get(view.scheduledDate);
-        if (list) {
-          list.push(view);
-        } else {
-          byDate.set(view.scheduledDate, [view]);
-        }
-      }
-      const sortedDays = [...byDate.keys()].sort().reverse();
-      // Today's overdue already sits expanded above, so a default-open group
-      // is only offered when today has none: the newest non-empty past day.
-      const defaultExpandedDay = views.length > 0 ? null : sortedDays[0] ?? null;
-      const yesterdayISO = toISODate(addDays(today, -1));
-      for (const dayISO of sortedDays) {
-        const dayViews = byDate.get(dayISO)!;
-        dayViews.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
-        const startedCount = dayViews.filter(
-          (view) =>
-            !view.isVirtual ||
-            instanceIdOverrides.has(
-              occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
-            ),
-        ).length;
-        const expanded = groupToggles.get(dayISO) ?? dayISO === defaultExpandedDay;
-        pastRows.push({
-          kind: 'dayheader',
-          key: `day-${dayISO}`,
-          dayISO,
-          label: `${dayISO === yesterdayISO ? 'Yesterday' : weekdayName(dayISO)} · ${monthDay(dayISO)}`,
-          count: `${startedCount}/${dayViews.length}`,
-          expanded,
-        });
-        if (expanded) {
-          for (const view of dayViews) {
-            pastRows.push({
-              kind: 'task',
-              key: `${view.assignmentId}-${view.scheduledFor}`,
-              view,
-            });
-          }
-        }
-      }
-    }
-
-    if (isLoading) return [{ kind: 'loading', key: 'loading' }];
-    if (viewsQuery.isError) {
-      return [{ kind: 'message', key: 'error', message: 'Could not load this day’s tasks.' }];
-    }
-    if (views.length === 0 && pastRows.length === 0) {
-      return [{ kind: 'message', key: 'empty', message: 'Nothing here for this day.' }];
-    }
-
-    const nextRows: DayRow[] = [];
-    for (const [hour, groupViews] of groups) {
-      nextRows.push({ kind: 'header', key: `header-${hour}`, hour });
-      for (const view of groupViews) {
-        nextRows.push({
-          kind: 'task',
-          key: `${view.assignmentId}-${view.scheduledFor}`,
-          view,
-        });
-      }
-    }
-    nextRows.push(...pastRows);
-    return nextRows;
-  }, [
-    groups,
-    isLoading,
-    views.length,
-    viewsQuery.isError,
-    activeStatus,
-    pastOverdueViews,
-    today,
-    groupToggles,
-    instanceIdOverrides,
-  ]);
+  const rows = useMemo(
+    () =>
+      buildDayRows({
+        views,
+        pastOverdueViews,
+        activeStatus,
+        isLoading,
+        isError: viewsQuery.isError,
+        yesterdayISO: toISODate(addDays(today, -1)),
+        groupToggles,
+        startedInstanceIds: instanceIdOverrides,
+      }),
+    [
+      views,
+      pastOverdueViews,
+      activeStatus,
+      isLoading,
+      viewsQuery.isError,
+      today,
+      groupToggles,
+      instanceIdOverrides,
+    ],
+  );
 
   // Pin hour-slot and day-group headers while their section scrolls
   // (QQ-roster style; an incoming header pushes the stuck one out).

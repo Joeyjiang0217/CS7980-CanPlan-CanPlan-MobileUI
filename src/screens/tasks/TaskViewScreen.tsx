@@ -26,6 +26,11 @@ import {
 } from '../../features/assignments/occurrenceCompletion';
 import { resolveOccurrenceSteps } from '../../features/assignments/occurrenceSteps';
 import {
+  completedStepIds,
+  mergeStepOverrides,
+  pruneSettledOverrides,
+} from '../../features/assignments/stepCompletion';
+import {
   useInstanceSteps,
   useSetInstanceStepCompletion,
   useStartTaskInstance,
@@ -599,45 +604,17 @@ export default function TaskViewScreen() {
     () => instanceStepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [instanceStepsQuery.data],
   );
-  const serverCompletedSteps = useMemo(() => {
-    const set = new Set<string>();
-    for (const item of instanceSteps) {
-      if (item.completed) {
-        set.add(item.stepId);
-      }
-    }
-    return set;
-  }, [instanceSteps]);
+  const serverCompletedSteps = useMemo(() => completedStepIds(instanceSteps), [instanceSteps]);
   const [stepOverrides, setStepOverrides] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [pendingSteps, setPendingSteps] = useState<ReadonlySet<string>>(new Set());
-  const completedSteps = useMemo(() => {
-    const set = new Set(serverCompletedSteps);
-    stepOverrides.forEach((completed, stepId) => {
-      if (completed) {
-        set.add(stepId);
-      } else {
-        set.delete(stepId);
-      }
-    });
-    return set;
-  }, [serverCompletedSteps, stepOverrides]);
+  const completedSteps = useMemo(
+    () => mergeStepOverrides(serverCompletedSteps, stepOverrides),
+    [serverCompletedSteps, stepOverrides],
+  );
 
   // Drop an optimistic override once the refetched server state agrees with it.
   useEffect(() => {
-    setStepOverrides((current) => {
-      if (current.size === 0) {
-        return current;
-      }
-      const next = new Map(current);
-      let changed = false;
-      current.forEach((completed, stepId) => {
-        if (serverCompletedSteps.has(stepId) === completed) {
-          next.delete(stepId);
-          changed = true;
-        }
-      });
-      return changed ? next : current;
-    });
+    setStepOverrides((current) => pruneSettledOverrides(current, serverCompletedSteps));
   }, [serverCompletedSteps]);
 
   // Resolve (materializing on demand) the real instance id for this occurrence.

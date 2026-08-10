@@ -55,8 +55,11 @@ function subscribe(listener: () => void) {
   };
 }
 
-/** Merge a stored blob over the defaults, dropping unknown/mistyped values. */
-function sanitize(stored: unknown): AudioSettings {
+/**
+ * Merge a stored blob over the defaults, dropping unknown/mistyped values.
+ * Exported for tests (see interfaceSettings.sanitize).
+ */
+export function sanitize(stored: unknown): AudioSettings {
   const result = { ...AUDIO_SETTINGS_DEFAULTS };
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
     return result;

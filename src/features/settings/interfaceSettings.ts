@@ -53,8 +53,12 @@ function subscribe(listener: () => void) {
   };
 }
 
-/** Merge a stored blob over the defaults, dropping unknown/mistyped values. */
-function sanitize(stored: unknown): InterfaceSettings {
+/**
+ * Merge a stored blob over the defaults, dropping unknown/mistyped values.
+ * Exported for tests: this is what makes removing a setting safe, so its
+ * tolerance of older blobs is worth pinning down.
+ */
+export function sanitize(stored: unknown): InterfaceSettings {
   const result = { ...INTERFACE_SETTINGS_DEFAULTS };
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
     return result;
