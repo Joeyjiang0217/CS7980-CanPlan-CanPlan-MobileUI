@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useSession } from '../../app/SessionContext';
 import { useSignIn } from '../../features/auth';
 import { messageForSignInError } from '../../features/auth/lib/errorMessages';
 import type { AuthStackParamList } from '../../navigation/types';
@@ -30,7 +29,6 @@ export default function SignInScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<Nav>();
   const signInMutation = useSignIn();
-  const { enterGuestMode } = useSession();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -83,10 +81,6 @@ export default function SignInScreen() {
 
   const handleCreateAccount = () => {
     navigation.navigate('CreateAccount');
-  };
-
-  const handleSkip = () => {
-    enterGuestMode();
   };
 
   return (
@@ -168,15 +162,6 @@ export default function SignInScreen() {
           </View>
 
           <SecondaryButton label="Create Account" onPress={handleCreateAccount} />
-
-          <Pressable
-            accessibilityRole="button"
-            onPress={handleSkip}
-            style={styles.skipWrap}
-            hitSlop={8}
-          >
-            <Text style={styles.skipText}>Skip — try the app first</Text>
-          </Pressable>
 
           <View style={{ flex: 1 }} />
 
@@ -272,16 +257,6 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textMuted,
     marginHorizontal: spacing.md,
-  },
-  skipWrap: {
-    alignSelf: 'center',
-    marginTop: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  skipText: {
-    ...typography.body,
-    color: colors.textMuted,
-    textDecorationLine: 'underline',
   },
   footnote: {
     ...typography.caption,
