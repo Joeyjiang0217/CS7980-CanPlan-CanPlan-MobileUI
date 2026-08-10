@@ -280,16 +280,16 @@ export default function StepDetailScreen() {
   const taskQuery = useTask(taskId);
   const stepsQuery = useTaskSteps(taskId);
 
-  // Reviewing a finished occurrence pages through its snapshot (which also fixes
-  // the page count); every live mode still pages through the template.
+  // A started occurrence pages through its own snapshot (which also fixes the
+  // page count); template views page through the template.
   const steps = useMemo(
     () =>
       resolveOccurrenceSteps({
         templateSteps: stepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
         instanceSteps,
-        completed: status === 'COMPLETED',
+        materialized: Boolean(instanceId),
       }),
-    [stepsQuery.data, instanceSteps, status],
+    [stepsQuery.data, instanceSteps, instanceId],
   );
   // The pager pages through steps in place; the route only picks the start.
   const routeIndex = steps.findIndex((s) => s.stepId === stepId);

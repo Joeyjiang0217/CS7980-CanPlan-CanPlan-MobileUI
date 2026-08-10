@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { listTaskInstanceSteps } from '../../features/assignments/api/assignmentApi';
 import {
   occurrenceKey,
   setOccurrenceInstanceId,
@@ -779,17 +780,28 @@ export default function TaskViewScreen() {
         // The backend rejects COMPLETED unless every step is marked complete on
         // the instance, but step check-off is UI-only — so persist all steps as
         // complete first. (SKIPPED has no such requirement.)
+        //
+        // The instance's own steps, not the template's: once the template has
+        // been edited the two are different sets, and checking off the template
+        // left the occurrence permanently uncompletable — a step deleted from the
+        // template still has an unchecked snapshot row (deleteTaskStep leaves
+        // instance rows alone) that the backend counts, while a step added to the
+        // template has no row to check, so writing it fails outright. Fetched
+        // rather than read from the query cache because `ensureInstance` may have
+        // just created these rows.
         if (status === 'COMPLETED') {
-          const stepList = stepsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+          const snapshot = await listTaskInstanceSteps(ownerId, id, { limit: 100 });
           await Promise.all(
-            stepList.map((step) =>
-              setStepCompletion.mutateAsync({
-                userId: ownerId,
-                instanceId: id,
-                stepId: step.stepId,
-                completed: true,
-              }),
-            ),
+            snapshot.items
+              .filter((step) => !step.completed)
+              .map((step) =>
+                setStepCompletion.mutateAsync({
+                  userId: ownerId,
+                  instanceId: id,
+                  stepId: step.stepId,
+                  completed: true,
+                }),
+              ),
           );
         }
         await updateStatus.mutateAsync({ userId: ownerId, instanceId: id, status });
@@ -803,7 +815,7 @@ export default function TaskViewScreen() {
         setFinishError(error instanceof Error ? error.message : 'Could not save. Please try again.');
       }
     },
-    [isInstance, ownerId, ensureInstance, updateStatus, setStepCompletion, stepsQuery.data, occKey, navigation],
+    [isInstance, ownerId, ensureInstance, updateStatus, setStepCompletion, occKey, navigation],
   );
 
   const unskipOccurrence = useCallback(async () => {
@@ -841,16 +853,16 @@ export default function TaskViewScreen() {
   ]);
 
 
-  // A finished occurrence renders its own snapshot, so history doesn't follow
-  // later template edits. Everything still in play reads the template.
+  // A started occurrence renders its own snapshot, so a template edited later
+  // can't rewrite what is being worked through — or what was already done.
   const steps = useMemo(
     () =>
       resolveOccurrenceSteps({
         templateSteps: stepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
         instanceSteps,
-        completed: isCompletedOcc,
+        materialized: isMaterialized,
       }),
-    [stepsQuery.data, instanceSteps, isCompletedOcc],
+    [stepsQuery.data, instanceSteps, isMaterialized],
   );
   const doneCount = useMemo(
     () => steps.filter((step) => completedSteps.has(step.stepId)).length,

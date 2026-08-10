@@ -534,11 +534,11 @@ function AssignmentCard({
     }
     return count;
   }, [instanceStepsQuery.data]);
-  // A finished card counts the steps the occurrence actually had, matching the
-  // frozen list behind it. Cards still in play keep counting the template, so
-  // nothing about starting or completing a task changes.
-  const totalSteps =
-    bucket === 'done' && instanceStepCount > 0 ? instanceStepCount : templateStepCount;
+  // Count the occurrence's own steps once it has them, matching the frozen list
+  // behind the card. Counting the template instead could call a task fully done
+  // while a snapshot step sat unchecked — which the backend then refuses to
+  // complete, leaving the "All done!" button permanently failing.
+  const totalSteps = instanceStepCount > 0 ? instanceStepCount : templateStepCount;
   // Every step checked on a started occurrence (but not yet marked done).
   const allStepsDone = started && totalSteps > 0 && doneSteps >= totalSteps;
   const stepsLine = (
