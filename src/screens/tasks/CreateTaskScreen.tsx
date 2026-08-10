@@ -26,6 +26,7 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useCreateAiTask } from '../../features/ai/hooks/useCreateAiTask';
+import { useMyProfile } from '../../features/users/hooks/useMyProfile';
 import {
   useCreateTask,
   useCreateTaskStep,
@@ -255,6 +256,10 @@ export default function CreateTaskScreen() {
   const deleteMediaAssetMutation = useDeleteMediaAsset();
   const createAiTaskMutation = useCreateAiTask();
   const createTaskStepMutation = useCreateTaskStep();
+  // Whose role gates AI grounding: the person operating the editor, not the
+  // task's eventual owner (a caregiver authoring for a primary user still gets
+  // the caregiver's latitude).
+  const { data: operatorProfile } = useMyProfile();
   const existingTaskQuery = useTask(existingTaskId ?? '');
   const [taskId, setTaskId] = useState<string>();
   const activeTaskId = existingTaskId ?? taskId ?? '';
@@ -293,6 +298,9 @@ export default function CreateTaskScreen() {
   const [busyAction, setBusyAction] = useState<string>();
   const [inlineError, setInlineError] = useState<string>();
   const [aiStepsNotice, setAiStepsNotice] = useState(false);
+  // Primary users only: the task fell outside CanPlan's guidance, so no steps
+  // were generated (or kept) and the card explains why.
+  const [aiUngroundedBlocked, setAiUngroundedBlocked] = useState(false);
   const [hydratedTaskId, setHydratedTaskId] = useState<string>();
   const categoriesQuery = useMyCategories(Boolean(categoryOwnerId), 50, categoryOwnerId);
   const taskOperationRef = useRef<string | undefined>(undefined);
@@ -762,14 +770,25 @@ export default function CreateTaskScreen() {
     setBusyAction('ai-steps');
     setInlineError(undefined);
     setAiStepsNotice(false);
+    setAiUngroundedBlocked(false);
+    // Only caregivers may author tasks CanPlan's guidance doesn't cover; for a
+    // primary user the request is grounded-only, and the `grounded` flag is
+    // re-checked below so an ungrounded result is never persisted for them.
+    const allowUngrounded = operatorProfile?.role === 'SUPPORT_PERSON';
     try {
       const generated = await createAiTaskMutation.mutateAsync({
         query: trimmedTitle,
-        groundingMode: 'ALLOW_UNGROUNDED_FALLBACK',
+        groundingMode: allowUngrounded ? 'ALLOW_UNGROUNDED_FALLBACK' : 'GROUNDED_ONLY',
       });
       const stepTexts = generated.steps
         .map((generatedStep) => generatedStep.text.trim())
         .filter((text) => text.length > 0);
+      // Outside guidance for a primary user: discard the result (nothing is
+      // written) and explain instead of surfacing a generic failure.
+      if (!allowUngrounded && (!generated.grounded || stepTexts.length === 0)) {
+        setAiUngroundedBlocked(true);
+        return;
+      }
       if (stepTexts.length === 0) {
         throw new Error('AI could not create steps for this task. Please try again or add steps yourself.');
       }
@@ -1026,6 +1045,15 @@ export default function CreateTaskScreen() {
             <Ionicons name="sparkles-outline" size={18} color={colors.warning} />
             <Text style={styles.aiNoticeText}>
               These steps were created by AI, not from CanPlan&apos;s guidance. Please check each one.
+            </Text>
+          </View>
+        ) : null}
+        {aiUngroundedBlocked ? (
+          <View accessibilityRole="alert" style={styles.aiNotice}>
+            <Ionicons name="information-circle-outline" size={18} color={colors.warning} />
+            <Text style={styles.aiNoticeText}>
+              This task isn&apos;t in CanPlan&apos;s guidance, so AI can&apos;t create steps for
+              it. Please add the steps yourself, or ask your support person to help.
             </Text>
           </View>
         ) : null}
