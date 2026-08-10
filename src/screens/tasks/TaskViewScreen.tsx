@@ -23,6 +23,7 @@ import {
   setOccurrenceStatus,
   useOccurrenceStatuses,
 } from '../../features/assignments/occurrenceCompletion';
+import { resolveOccurrenceSteps } from '../../features/assignments/occurrenceSteps';
 import {
   useInstanceSteps,
   useSetInstanceStepCompletion,
@@ -593,17 +594,19 @@ export default function TaskViewScreen() {
   // the source of truth; an optimistic overlay keeps taps instant while each
   // write syncs to the backend.
   const instanceStepsQuery = useInstanceSteps(ownerId, instanceId ?? '');
+  const instanceSteps = useMemo(
+    () => instanceStepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [instanceStepsQuery.data],
+  );
   const serverCompletedSteps = useMemo(() => {
     const set = new Set<string>();
-    for (const page of instanceStepsQuery.data?.pages ?? []) {
-      for (const item of page.items) {
-        if (item.completed) {
-          set.add(item.stepId);
-        }
+    for (const item of instanceSteps) {
+      if (item.completed) {
+        set.add(item.stepId);
       }
     }
     return set;
-  }, [instanceStepsQuery.data]);
+  }, [instanceSteps]);
   const [stepOverrides, setStepOverrides] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [pendingSteps, setPendingSteps] = useState<ReadonlySet<string>>(new Set());
   const completedSteps = useMemo(() => {
@@ -838,12 +841,16 @@ export default function TaskViewScreen() {
   ]);
 
 
+  // A finished occurrence renders its own snapshot, so history doesn't follow
+  // later template edits. Everything still in play reads the template.
   const steps = useMemo(
     () =>
-      [...(stepsQuery.data?.pages.flatMap((page) => page.items) ?? [])].sort(
-        (a, b) => a.order - b.order,
-      ),
-    [stepsQuery.data],
+      resolveOccurrenceSteps({
+        templateSteps: stepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+        instanceSteps,
+        completed: isCompletedOcc,
+      }),
+    [stepsQuery.data, instanceSteps, isCompletedOcc],
   );
   const doneCount = useMemo(
     () => steps.filter((step) => completedSteps.has(step.stepId)).length,

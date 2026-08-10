@@ -36,6 +36,7 @@ import {
   useInstanceSteps,
   useSetInstanceStepCompletion,
 } from '../../features/assignments/hooks/useAssignments';
+import { resolveOccurrenceSteps } from '../../features/assignments/occurrenceSteps';
 import { speechRateFor, useAudioSettings } from '../../features/settings/audioSettings';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
 import { useCachedMediaUri } from '../../features/media/hooks/useCachedMedia';
@@ -247,15 +248,17 @@ export default function StepDetailScreen() {
   }, [managedOwnerId]);
 
   const instanceStepsQuery = useInstanceSteps(ownerId, instanceId ?? '');
+  const instanceSteps = useMemo(
+    () => instanceStepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [instanceStepsQuery.data],
+  );
   const serverCompletedByStep = useMemo(() => {
     const map: Record<string, boolean> = {};
-    for (const page of instanceStepsQuery.data?.pages ?? []) {
-      for (const item of page.items) {
-        map[item.stepId] = item.completed;
-      }
+    for (const item of instanceSteps) {
+      map[item.stepId] = item.completed;
     }
     return map;
-  }, [instanceStepsQuery.data]);
+  }, [instanceSteps]);
 
   // Drop optimistic overrides once the refetched server state agrees.
   useEffect(() => {
@@ -277,12 +280,16 @@ export default function StepDetailScreen() {
   const taskQuery = useTask(taskId);
   const stepsQuery = useTaskSteps(taskId);
 
+  // Reviewing a finished occurrence pages through its snapshot (which also fixes
+  // the page count); every live mode still pages through the template.
   const steps = useMemo(
     () =>
-      [...(stepsQuery.data?.pages.flatMap((page) => page.items) ?? [])].sort(
-        (a, b) => a.order - b.order,
-      ),
-    [stepsQuery.data],
+      resolveOccurrenceSteps({
+        templateSteps: stepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+        instanceSteps,
+        completed: status === 'COMPLETED',
+      }),
+    [stepsQuery.data, instanceSteps, status],
   );
   // The pager pages through steps in place; the route only picks the start.
   const routeIndex = steps.findIndex((s) => s.stepId === stepId);

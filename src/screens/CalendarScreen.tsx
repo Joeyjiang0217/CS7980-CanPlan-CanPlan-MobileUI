@@ -513,10 +513,15 @@ function AssignmentCard({
   // a plain task: total comes from the task's steps, done from the backend's
   // instance step snapshots (virtual occurrences have none → 0 done).
   const stepsQuery = useTaskSteps(view.taskId);
-  const totalSteps = stepsQuery.data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0;
+  const templateStepCount =
+    stepsQuery.data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0;
   const instanceStepsQuery = useInstanceSteps(
     ownerId,
     view.isVirtual ? '' : view.instanceId ?? '',
+  );
+  const instanceStepCount = useMemo(
+    () => instanceStepsQuery.data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0,
+    [instanceStepsQuery.data],
   );
   const doneSteps = useMemo(() => {
     let count = 0;
@@ -529,6 +534,11 @@ function AssignmentCard({
     }
     return count;
   }, [instanceStepsQuery.data]);
+  // A finished card counts the steps the occurrence actually had, matching the
+  // frozen list behind it. Cards still in play keep counting the template, so
+  // nothing about starting or completing a task changes.
+  const totalSteps =
+    bucket === 'done' && instanceStepCount > 0 ? instanceStepCount : templateStepCount;
   // Every step checked on a started occurrence (but not yet marked done).
   const allStepsDone = started && totalSteps > 0 && doneSteps >= totalSteps;
   const stepsLine = (
