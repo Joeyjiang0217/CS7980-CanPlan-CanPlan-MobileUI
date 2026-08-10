@@ -76,6 +76,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
 }
 
+/** Compare task names loosely, so casing and stray spaces don't read as a rename. */
+function normalizeTitle(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Whether a failed createAiTask means "the guidance corpus has nothing for this
+ * task" rather than a real fault. GROUNDED_ONLY signals the miss by raising an
+ * error, and the wire carries no code for it, so this matches on wording —
+ * replace with the error code if the backend ever exposes one.
+ */
+function isMissingGuidanceError(error: unknown): boolean {
+  return error instanceof Error && /guidance/i.test(error.message);
+}
+
 type MediaDisplay = { icon: keyof typeof Ionicons.glyphMap; label: string };
 
 function mediaDisplay(type?: MediaType): MediaDisplay {
@@ -301,6 +316,14 @@ export default function CreateTaskScreen() {
   // Primary users only: the task fell outside CanPlan's guidance, so no steps
   // were generated (or kept) and the card explains why.
   const [aiUngroundedBlocked, setAiUngroundedBlocked] = useState(false);
+  // The task name the steps below were generated for, kept verbatim so it can be
+  // shown and restored (comparisons normalize). Set only when this editor
+  // generated them, so renaming a task whose steps the user wrote by hand never
+  // offers to replace their work — steps carry no provenance server side, so
+  // "we made these, this session" is the only claim we can honestly make.
+  const [aiStepsTitle, setAiStepsTitle] = useState<string>();
+  const [titleFocused, setTitleFocused] = useState(false);
+  const [replaceStepsConfirmVisible, setReplaceStepsConfirmVisible] = useState(false);
   const [hydratedTaskId, setHydratedTaskId] = useState<string>();
   const categoriesQuery = useMyCategories(Boolean(categoryOwnerId), 50, categoryOwnerId);
   const taskOperationRef = useRef<string | undefined>(undefined);
@@ -317,6 +340,14 @@ export default function CreateTaskScreen() {
     createCoverUploadUrlMutation.isPending ||
     deleteMediaAssetMutation.isPending;
   const trimmedTitle = title.trim();
+  // The steps were generated for a different name. Gated on the field being
+  // blurred so the offer appears once the rename settles, not mid-keystroke.
+  const aiStepsStale =
+    aiStepsTitle !== undefined &&
+    steps.length > 0 &&
+    !titleFocused &&
+    trimmedTitle.length > 0 &&
+    normalizeTitle(trimmedTitle) !== normalizeTitle(aiStepsTitle);
   // When pinned to a category (and not editing), the picker is read-only.
   const categoryLocked = Boolean(fixedCategoryId) && !existingTaskId;
   const shouldConfirmDraftDiscard =
@@ -390,6 +421,14 @@ export default function CreateTaskScreen() {
       }
     }, [activeTaskId, existingStepsQuery.refetch]),
   );
+
+  // An AI verdict belongs to the name it was asked about, so editing the name
+  // retires it — otherwise "no relevant guidance found" outlives the name that
+  // had none and reads as a standing failure.
+  useEffect(() => {
+    setAiUngroundedBlocked(false);
+    setInlineError(undefined);
+  }, [trimmedTitle]);
 
   useEffect(() => {
     if (existingCoverQuery.data?.downloadUrl && !coverImage) {
@@ -762,11 +801,17 @@ export default function CreateTaskScreen() {
     }
   };
 
-  const handleGenerateAiSteps = async () => {
-    if (!taskId || !trimmedTitle || isBusy || steps.length > 0) {
+  // `replace` comes from the rename card: the steps below were generated for an
+  // older name, so they are swapped for a fresh set rather than appended to.
+  const handleGenerateAiSteps = async ({ replace = false } = {}) => {
+    if (!taskId || !trimmedTitle || isBusy) {
+      return;
+    }
+    if (!replace && steps.length > 0) {
       return;
     }
 
+    setReplaceStepsConfirmVisible(false);
     setBusyAction('ai-steps');
     setInlineError(undefined);
     setAiStepsNotice(false);
@@ -798,6 +843,24 @@ export default function CreateTaskScreen() {
         setAiStepsNotice(true);
       }
 
+      // Only now is anything destroyed: the replacement steps are already in
+      // hand, so a refusal or failure above leaves the old ones untouched
+      // instead of emptying the task.
+      if (replace) {
+        for (const staleStep of steps) {
+          const deletedStep = await deleteTaskStepMutation.mutateAsync({
+            taskId,
+            stepId: staleStep.stepId,
+          });
+          if (!deletedStep) {
+            throw new Error('Could not clear the old steps. Please review the list below.');
+          }
+          setSteps((currentSteps) =>
+            currentSteps.filter((step) => step.stepId !== staleStep.stepId),
+          );
+        }
+      }
+
       // This screen's steps are server-backed (synced from useTaskSteps), so
       // persist each generated step; local-only entries would be overwritten.
       // Append to local state per step so a partial failure still shows what
@@ -821,7 +884,14 @@ export default function CreateTaskScreen() {
           },
         ]);
       }
+      // Baseline for the rename card: these steps now belong to this name.
+      setAiStepsTitle(trimmedTitle);
     } catch (error) {
+      // A grounded-only miss comes back as a thrown error, not as an
+      // ungrounded result, so the friendly explanation is driven from here too.
+      if (!allowUngrounded && isMissingGuidanceError(error)) {
+        setAiUngroundedBlocked(true);
+      }
       setInlineError(errorMessage(error));
     } finally {
       setBusyAction(undefined);
@@ -987,6 +1057,7 @@ export default function CreateTaskScreen() {
               titleCaretModeRef.current = 'end';
               const end = title.length;
               setTitleSelection({ start: end, end });
+              setTitleFocused(true);
             }}
             onSelectionChange={() => {
               if (titleCaretModeRef.current === 'end') {
@@ -997,6 +1068,7 @@ export default function CreateTaskScreen() {
             onBlur={() => {
               titleCaretModeRef.current = 'start';
               setTitleSelection({ start: 0, end: 0 });
+              setTitleFocused(false);
               handleTaskNameBlur();
             }}
           />
@@ -1040,6 +1112,52 @@ export default function CreateTaskScreen() {
             )}
           </Pressable>
         ) : null}
+        {/* Renamed after generating: offer a fresh set for the new name. The
+            normal AI card is hidden while steps exist, so this takes its place. */}
+        {aiStepsStale && busyAction !== 'ai-steps' ? (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Create new steps for ${trimmedTitle}`}
+              accessibilityState={{ disabled: isBusy }}
+              disabled={isBusy}
+              onPress={() => setReplaceStepsConfirmVisible(true)}
+              style={({ pressed }) => [
+                styles.aiSuggestCard,
+                pressed && !isBusy ? styles.addPhotoActionPressed : null,
+                isBusy ? styles.controlDisabled : null,
+              ]}
+            >
+              <Ionicons name="sparkles-outline" size={24} color={colors.primary} />
+              <View style={styles.aiSuggestCopy}>
+                <Text style={styles.aiSuggestTitle}>The name changed</Text>
+                <Text style={styles.aiSuggestDescription}>
+                  The steps below were made for “{aiStepsTitle}”. Tap to create new steps for
+                  “{trimmedTitle}”.
+                </Text>
+              </View>
+            </Pressable>
+            {/* The way back: the old name is the only record of what the steps
+                below belong to, so restoring it is one tap rather than recall. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Use the old name, ${aiStepsTitle}, again`}
+              disabled={isBusy}
+              onPress={() => {
+                setTitle(aiStepsTitle ?? '');
+                setReplaceStepsConfirmVisible(false);
+              }}
+              style={({ pressed }) => [
+                styles.aiRestoreNameButton,
+                pressed && !isBusy ? styles.addPhotoActionPressed : null,
+                isBusy ? styles.controlDisabled : null,
+              ]}
+            >
+              <Ionicons name="arrow-undo" size={16} color={colors.primary} />
+              <Text style={styles.aiRestoreNameText}>Use “{aiStepsTitle}” again</Text>
+            </Pressable>
+          </>
+        ) : null}
         {steps.length > 0 && aiStepsNotice ? (
           <View accessibilityRole="alert" style={styles.aiNotice}>
             <Ionicons name="sparkles-outline" size={18} color={colors.warning} />
@@ -1048,7 +1166,9 @@ export default function CreateTaskScreen() {
             </Text>
           </View>
         ) : null}
-        {aiUngroundedBlocked ? (
+        {/* Suppressed while the rename card is up: that card already says the
+            steps belong to the old name and offers the way back. */}
+        {aiUngroundedBlocked && !aiStepsStale ? (
           <View accessibilityRole="alert" style={styles.aiNotice}>
             <Ionicons name="information-circle-outline" size={18} color={colors.warning} />
             <Text style={styles.aiNoticeText}>
@@ -1299,6 +1419,18 @@ export default function CreateTaskScreen() {
             setDeleteCoverVisible(false);
           }
         }}
+      />
+      <ConfirmDialog
+        visible={replaceStepsConfirmVisible}
+        title={`Create new steps for “${trimmedTitle}”?`}
+        message={`This replaces the ${steps.length} ${steps.length === 1 ? 'step' : 'steps'} below. The new steps are made first, so nothing is lost if this doesn't work.`}
+        confirmLabel="Create new steps"
+        cancelLabel="Keep these steps"
+        destructive
+        onConfirm={() => {
+          void handleGenerateAiSteps({ replace: true });
+        }}
+        onCancel={() => setReplaceStepsConfirmVisible(false)}
       />
       <ConfirmDialog
         visible={Boolean(stepToDelete)}
@@ -1740,6 +1872,19 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     marginTop: spacing.xs,
+  },
+  aiRestoreNameButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  aiRestoreNameText: {
+    ...typography.bodyStrong,
+    color: colors.primary,
+    textDecorationLine: 'underline',
   },
   aiNotice: {
     flexDirection: 'row',
