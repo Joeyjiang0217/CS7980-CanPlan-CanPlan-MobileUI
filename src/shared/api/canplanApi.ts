@@ -36,6 +36,8 @@ import type {
   DeleteTaskStepInput,
   EndTaskAssignmentInput,
   GenerateReportInput,
+  GeneratedReport,
+  SaveReportInput,
   GenerateTaskStepsInput,
   GeneratedAiTask,
   InviteUserInput,
@@ -691,12 +693,26 @@ export const canPlanApi = {
     return data.generateTaskSteps;
   },
 
-  async generateReport(input: GenerateReportInput): Promise<Report> {
+  /**
+   * Non-persisting preview: returns the AI narrative + stats inline with a
+   * server-signed `draftToken`. The AWSJSON fields stay as raw strings so the
+   * exact content can be handed back to `saveReport`. Call `saveReport` to keep it.
+   */
+  async generateReport(input: GenerateReportInput): Promise<GeneratedReport> {
     const data = await graphqlRequest<
-      { generateReport: RawReport },
+      { generateReport: GeneratedReport },
       { input: GenerateReportInput }
     >(operations.GENERATE_REPORT, { input });
-    return mapReport(data.generateReport);
+    return data.generateReport;
+  },
+
+  /** Persist a previously generated draft (re-submit its exact content + token). */
+  async saveReport(input: SaveReportInput): Promise<Report> {
+    const data = await graphqlRequest<
+      { saveReport: RawReport },
+      { input: SaveReportInput }
+    >(operations.SAVE_REPORT, { input });
+    return mapReport(data.saveReport);
   },
 
   async inviteSupportPerson(input: InviteUserInput): Promise<AdminUserResult> {

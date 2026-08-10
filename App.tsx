@@ -37,6 +37,7 @@ import PrivacyPolicySettingsScreen from './src/screens/PrivacyPolicySettingsScre
 import SettingsScreen from './src/screens/SettingsScreen';
 import CategoriesScreen from './src/screens/categories/CategoriesScreen';
 import ReportsScreen from './src/screens/reports/ReportsScreen';
+import ReportPreviewScreen from './src/screens/reports/ReportPreviewScreen';
 import ReportViewScreen from './src/screens/reports/ReportViewScreen';
 import AllTasksScreen from './src/screens/tasks/AllTasksScreen';
 import CreateTaskScreen from './src/screens/tasks/CreateTaskScreen';
@@ -153,6 +154,7 @@ function RootStack() {
           <Stack.Screen name="OccurrenceDetail" component={OccurrenceDetailScreen} />
           <Stack.Screen name="StepDetail" component={StepDetailScreen} />
           <Stack.Screen name="Reports" component={ReportsScreen} />
+          <Stack.Screen name="ReportPreview" component={ReportPreviewScreen} />
           <Stack.Screen name="ReportView" component={ReportViewScreen} />
         </>
       )}
