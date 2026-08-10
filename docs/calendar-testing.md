@@ -1,36 +1,61 @@
-# CanPlan · Calendar 测试说明
+# CanPlan · Calendar testing notes
 
-> ⚠️ **Settings（设置）目前只有 UI，还没接真实设置接口**，改动不会保存，先别当真。
+## 1. Create a task and schedule it
+1. Open **Calendar**.
+2. Tap **＋** in the top right. Two ways in:
+   - pick something that already exists from **All Tasks**, or
+   - **create a new task** (it is added to All Tasks automatically).
+3. Set the **start date, time, and repeat (Daily / Weekly / …)**.
+4. The task then appears on the matching day in the Calendar.
 
-## 一、创建任务并排期
-1. 进入 **Calendar**。
-2. 点右上角 **＋**，有两种方式：
-   - 从已有的 **All Tasks** 里选一个；
-   - 或**新建一个 task**（新建的会自动加入 All Tasks）。
-3. 设置 **start date（开始日期）、时间、频次（Daily / Weekly / …）**。
-4. 创建后，这个 task 就会出现在对应日期的 Calendar 上。
+## 2. Materialized vs unmaterialized, and the colour rule (the core of it)
+- **Materialized (instance)** = the real, actionable row. **Unmaterialized (assignment, virtual)** =
+  a future placeholder projected from the repeat rule.
+- Tasks are always scheduled in the future, so a freshly created one is always **To Do**. Within one
+  series, **only the frontier row is materialized (full colour)** at any moment; everything after it
+  is **unmaterialized (grey)**.
+- **How the frontier advances** — the same in both cases: as soon as the frontier row leaves To Do,
+  the next one turns from an assignment into an instance, grey → full colour.
+  - **Case A (by hand):** after its time, tap Done or Skipped → that row leaves To Do → the next
+    day's row materializes on its own. Do the same to the next day and the third day materializes.
+    At that point **the first two days can only delete themselves**, while **the third day (now the
+    active one) can delete itself or itself and everything after it**.
+  - **Case B (overdue):** the first day passes its scheduled time and becomes **Overdue** → the next
+    day materializes the same way.
+- In one line: **active (earliest unfinished, full colour) = delete this one or all future ones;
+  already Done / Skipped / Overdue (full colour) = delete this one only; grey (unmaterialized) =
+  no actions**. Tapping a grey card explains this and points at the day to act on instead (the
+  nearest materialized date).
 
-## 二、物化 / 未物化 & 颜色规则（核心）
-- **物化 (instance)** = 真实存在、可操作的那条；**未物化 (assignment，虚拟)** = 按重复规则投影出来的未来占位。
-- 任务都建在未来，所以创建出来一定是 **To Do**。一个系列里**同一时刻只有“最前沿”那条是物化的（原色）**，它之后的都是**未物化（灰色）**。
-- **推进逻辑**（两种情况一致：只要最前沿那条离开 To Do，下一条就自动从 assignment 变 instance、灰 → 原色）：
-  - **情况一（手动）**：到点后点 Done 或 Skipped → 该条离开 To Do → 第二天那条自动物化变原色。再把第二天的 Done/Skipped → 第三天物化。此时**前两天变成只能删自己**，**第三天（当前活跃）可删自己或删自己及以后**。
-  - **情况二（逾期）**：第一天过了时间点变 **Overdue** → 第二天同样自动物化变原色。
-- 一句话总结：**当前活跃（最早未完成、原色）= 可删自己 / 删将来；已 Done/Skipped/Overdue（原色）= 只能删自己；灰色（未物化）= 不能操作**。点灰色卡会弹提示，并告诉你该去哪一天（最近物化的日期）操作。
+## 3. Month-view thumbnails (the month picker behind 👁 in the top right)
+- Each day shows a collage of that day's task covers: **materialized in full colour,
+  unmaterialized in grey**, so real work and future placeholders are distinguishable at a glance.
 
-## 三、月视图缩略图（日历右上角 👁 打开的 month picker）
-- 每天显示当天任务封面拼图：**已物化 = 原色**，**未物化 = 灰色**，一眼区分真实任务和未来占位。
+## 4. Working through a To Do
+- Open a To Do occurrence: scroll to the bottom to **Skip**, or check every step off — the Skip
+  button then becomes **confirm completion**, and confirming moves the occurrence **To Do → Done**.
+- Completing a step happens in the step detail player, not in the list, so the time spent on it is
+  recorded. The list offers undo on steps already done.
 
-## 四、To Do 的执行
-- 点进一个 To Do 任务：直接拉到底部可 **Skip**；或把每一步都 check 完，底部的 Skip 会变成**确认完成**，点确认后状态 **To Do → Done**。
+## 5. Status transition rules
+- **Done cannot become Skipped.**
+- **Overdue** can become Done or Skipped (and is marked as having been overdue).
+- **Skipped can be undone**: it returns to To Do, or to Overdue if its time has passed. The backend
+  allows this one transition out of a terminal state specifically.
 
-## 五、状态转换规则
-- **Done 不能改成 Skipped**。
-- **Overdue** 可改成 Done 或 Skipped（带 overdue 标识）。
-- **Skipped 取消 (un-skip)**：本应回到 To Do（时限内）或 Overdue（超时）——但见下方已知问题。
+## 6. Steps are frozen once an occurrence starts
+- Starting an occurrence snapshots the task's steps. Editing the template afterwards does **not**
+  change what a started or finished occurrence shows — that is deliberate, so work under way and
+  records of work done are not rewritten.
+- Only the step text and their order are frozen. Photos, audio, and descriptions are still read live
+  from the template, because deleting a step also deletes its media. See
+  [step-snapshots.md](step-snapshots.md) for what that costs and what would fix it.
+- So when testing template edits, expect: a step added later does not appear in an already-started
+  occurrence; a step deleted later still appears there, with its text but no photo.
 
-## 待讨论（后端能力缺口）
-1. **删除已 Done 的任务**：现在删不了。单删走 `cancelTaskInstance`（属于状态变更），后端对终态拒绝，也没有硬删除实例的接口。
-2. **Skipped 改状态 / 删除**：都不行，同样是后端把 SKIPPED 当终态、不允许再变更，也没有 reopen/delete 接口。
+## Open backend gap
+**Deleting a Done occurrence** is not possible. Deleting a single occurrence goes through
+`cancelTaskInstance`, which is a status change, and the backend freezes terminal instances and
+offers no hard delete for an instance.
 
-→ 需要后端补：允许对终态操作，或新增 `reopenTaskInstance` / `deleteTaskInstance`。
+→ Needs either permission to act on terminal instances, or a new `deleteTaskInstance`.
