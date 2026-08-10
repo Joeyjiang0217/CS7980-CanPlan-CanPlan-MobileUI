@@ -19,7 +19,7 @@ const APP_VERSION = '2.0.0';
 interface SettingsItem {
   label: string;
   /** Where tapping the row navigates. Omit for sections not built yet. */
-  route?: 'Interface' | 'Notifications' | 'AudioSpeech' | 'Statistics' | 'PrivacyPolicy';
+  route?: 'Interface' | 'Notifications' | 'AudioSpeech' | 'PrivacyPolicy';
 }
 
 // The settings hub. Only the rows with a `route` are wired up so far; the
@@ -29,7 +29,6 @@ const ITEMS: SettingsItem[] = [
   { label: 'Interface', route: 'Interface' },
   { label: 'Audio & Speech', route: 'AudioSpeech' },
   { label: 'iCloud Settings' },
-  { label: 'Statistics', route: 'Statistics' },
   { label: 'Privacy Policy', route: 'PrivacyPolicy' },
 ];
 

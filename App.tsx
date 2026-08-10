@@ -35,7 +35,6 @@ import InterfaceSettingsScreen from './src/screens/InterfaceSettingsScreen';
 import NotificationsSettingsScreen from './src/screens/NotificationsSettingsScreen';
 import PrivacyPolicySettingsScreen from './src/screens/PrivacyPolicySettingsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
-import StatisticsSettingsScreen from './src/screens/StatisticsSettingsScreen';
 import CategoriesScreen from './src/screens/categories/CategoriesScreen';
 import ReportsScreen from './src/screens/reports/ReportsScreen';
 import ReportViewScreen from './src/screens/reports/ReportViewScreen';
@@ -136,7 +135,6 @@ function RootStack() {
           <Stack.Screen name="Interface" component={InterfaceSettingsScreen} />
           <Stack.Screen name="Notifications" component={NotificationsSettingsScreen} />
           <Stack.Screen name="AudioSpeech" component={AudioSpeechSettingsScreen} />
-          <Stack.Screen name="Statistics" component={StatisticsSettingsScreen} />
           <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicySettingsScreen} />
           <Stack.Screen name="Categories" component={CategoriesScreen} />
           <Stack.Screen name="AllTasks" component={AllTasksScreen} />
