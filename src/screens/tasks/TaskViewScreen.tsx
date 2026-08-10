@@ -17,18 +17,26 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { listTaskInstanceSteps } from '../../features/assignments/api/assignmentApi';
 import {
   occurrenceKey,
   setOccurrenceInstanceId,
   setOccurrenceStatus,
   useOccurrenceStatuses,
 } from '../../features/assignments/occurrenceCompletion';
+import { resolveOccurrenceSteps } from '../../features/assignments/occurrenceSteps';
+import {
+  completedStepIds,
+  mergeStepOverrides,
+  pruneSettledOverrides,
+} from '../../features/assignments/stepCompletion';
 import {
   useInstanceSteps,
   useSetInstanceStepCompletion,
   useStartTaskInstance,
   useUpdateInstanceStatus,
 } from '../../features/assignments/hooks/useAssignments';
+import { speechRateFor, useAudioSettings } from '../../features/settings/audioSettings';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
 import type { PersistedTaskInstanceStatus } from '../../shared/api/canplanTypes';
 import { useCachedMediaUri } from '../../features/media/hooks/useCachedMedia';
@@ -195,6 +203,7 @@ function StepCard({
 
   // Text-to-speech fallback for steps that have no recording.
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const { speechSpeedPercent } = useAudioSettings();
 
   // Single source of truth both speaker controls render from.
   const isPlaying = hasAudio ? audioStatus.playing : isSpeaking;
@@ -245,6 +254,7 @@ function StepCard({
       void Speech.stop();
       setIsSpeaking(true);
       Speech.speak(`Step ${index + 1}. ${step.text}`, {
+        rate: speechRateFor(speechSpeedPercent),
         onDone: () => {
           setIsSpeaking(false);
           onDeactivate(step.stepId);
@@ -256,7 +266,7 @@ function StepCard({
         },
       });
     }
-  }, [isPlaying, hasAudio, audioPlayer, audioUri, onActivate, onDeactivate, step.stepId, step.text, index]);
+  }, [isPlaying, hasAudio, audioPlayer, audioUri, onActivate, onDeactivate, step.stepId, step.text, index, speechSpeedPercent]);
 
   return (
     <View style={styles.stepCard}>
@@ -590,47 +600,21 @@ export default function TaskViewScreen() {
   // the source of truth; an optimistic overlay keeps taps instant while each
   // write syncs to the backend.
   const instanceStepsQuery = useInstanceSteps(ownerId, instanceId ?? '');
-  const serverCompletedSteps = useMemo(() => {
-    const set = new Set<string>();
-    for (const page of instanceStepsQuery.data?.pages ?? []) {
-      for (const item of page.items) {
-        if (item.completed) {
-          set.add(item.stepId);
-        }
-      }
-    }
-    return set;
-  }, [instanceStepsQuery.data]);
+  const instanceSteps = useMemo(
+    () => instanceStepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [instanceStepsQuery.data],
+  );
+  const serverCompletedSteps = useMemo(() => completedStepIds(instanceSteps), [instanceSteps]);
   const [stepOverrides, setStepOverrides] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [pendingSteps, setPendingSteps] = useState<ReadonlySet<string>>(new Set());
-  const completedSteps = useMemo(() => {
-    const set = new Set(serverCompletedSteps);
-    stepOverrides.forEach((completed, stepId) => {
-      if (completed) {
-        set.add(stepId);
-      } else {
-        set.delete(stepId);
-      }
-    });
-    return set;
-  }, [serverCompletedSteps, stepOverrides]);
+  const completedSteps = useMemo(
+    () => mergeStepOverrides(serverCompletedSteps, stepOverrides),
+    [serverCompletedSteps, stepOverrides],
+  );
 
   // Drop an optimistic override once the refetched server state agrees with it.
   useEffect(() => {
-    setStepOverrides((current) => {
-      if (current.size === 0) {
-        return current;
-      }
-      const next = new Map(current);
-      let changed = false;
-      current.forEach((completed, stepId) => {
-        if (serverCompletedSteps.has(stepId) === completed) {
-          next.delete(stepId);
-          changed = true;
-        }
-      });
-      return changed ? next : current;
-    });
+    setStepOverrides((current) => pruneSettledOverrides(current, serverCompletedSteps));
   }, [serverCompletedSteps]);
 
   // Resolve (materializing on demand) the real instance id for this occurrence.
@@ -773,17 +757,28 @@ export default function TaskViewScreen() {
         // The backend rejects COMPLETED unless every step is marked complete on
         // the instance, but step check-off is UI-only — so persist all steps as
         // complete first. (SKIPPED has no such requirement.)
+        //
+        // The instance's own steps, not the template's: once the template has
+        // been edited the two are different sets, and checking off the template
+        // left the occurrence permanently uncompletable — a step deleted from the
+        // template still has an unchecked snapshot row (deleteTaskStep leaves
+        // instance rows alone) that the backend counts, while a step added to the
+        // template has no row to check, so writing it fails outright. Fetched
+        // rather than read from the query cache because `ensureInstance` may have
+        // just created these rows.
         if (status === 'COMPLETED') {
-          const stepList = stepsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+          const snapshot = await listTaskInstanceSteps(ownerId, id, { limit: 100 });
           await Promise.all(
-            stepList.map((step) =>
-              setStepCompletion.mutateAsync({
-                userId: ownerId,
-                instanceId: id,
-                stepId: step.stepId,
-                completed: true,
-              }),
-            ),
+            snapshot.items
+              .filter((step) => !step.completed)
+              .map((step) =>
+                setStepCompletion.mutateAsync({
+                  userId: ownerId,
+                  instanceId: id,
+                  stepId: step.stepId,
+                  completed: true,
+                }),
+              ),
           );
         }
         await updateStatus.mutateAsync({ userId: ownerId, instanceId: id, status });
@@ -797,7 +792,7 @@ export default function TaskViewScreen() {
         setFinishError(error instanceof Error ? error.message : 'Could not save. Please try again.');
       }
     },
-    [isInstance, ownerId, ensureInstance, updateStatus, setStepCompletion, stepsQuery.data, occKey, navigation],
+    [isInstance, ownerId, ensureInstance, updateStatus, setStepCompletion, occKey, navigation],
   );
 
   const unskipOccurrence = useCallback(async () => {
@@ -835,12 +830,16 @@ export default function TaskViewScreen() {
   ]);
 
 
+  // A started occurrence renders its own snapshot, so a template edited later
+  // can't rewrite what is being worked through — or what was already done.
   const steps = useMemo(
     () =>
-      [...(stepsQuery.data?.pages.flatMap((page) => page.items) ?? [])].sort(
-        (a, b) => a.order - b.order,
-      ),
-    [stepsQuery.data],
+      resolveOccurrenceSteps({
+        templateSteps: stepsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+        instanceSteps,
+        materialized: isMaterialized,
+      }),
+    [stepsQuery.data, instanceSteps, isMaterialized],
   );
   const doneCount = useMemo(
     () => steps.filter((step) => completedSteps.has(step.stepId)).length,

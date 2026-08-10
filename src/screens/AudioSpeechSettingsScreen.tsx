@@ -1,9 +1,9 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { updateAudioSettings, useAudioSettings } from '../features/settings/audioSettings';
 import type { MainStackParamList } from '../navigation/types';
 import BackButton from '../shared/components/BackButton';
 import PercentSlider from '../shared/components/PercentSlider';
@@ -15,9 +15,7 @@ export default function AudioSpeechSettingsScreen() {
   const navigation = useNavigation<AudioSpeechNavigation>();
   const insets = useSafeAreaInsets();
 
-  // UI-only for now — nothing is persisted yet.
-  const [autoPlayStepSounds, setAutoPlayStepSounds] = useState(false);
-  const [speechSpeed, setSpeechSpeed] = useState(50);
+  const { autoPlayStepSounds, speechSpeedPercent } = useAudioSettings();
 
   return (
     <View style={styles.root}>
@@ -37,11 +35,16 @@ export default function AudioSpeechSettingsScreen() {
       >
         <View style={styles.card}>
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Automatically Play Step Sounds</Text>
+            <View style={styles.rowCopy}>
+              <Text style={styles.rowLabel}>Automatically Play Step Sounds</Text>
+              <Text style={styles.rowHint}>
+                Steps read aloud as soon as you open them.
+              </Text>
+            </View>
             <Switch
               accessibilityLabel="Automatically Play Step Sounds"
               value={autoPlayStepSounds}
-              onValueChange={setAutoPlayStepSounds}
+              onValueChange={(next) => updateAudioSettings({ autoPlayStepSounds: next })}
               trackColor={{ false: colors.disabled, true: colors.primary }}
               thumbColor={colors.onPrimary}
               ios_backgroundColor={colors.disabled}
@@ -50,16 +53,20 @@ export default function AudioSpeechSettingsScreen() {
         </View>
 
         <Text style={[styles.sectionLabel, styles.sectionSpacer]}>
-          SPEECH SPEED — {speechSpeed}%
+          SPEECH SPEED — {speechSpeedPercent}%
         </Text>
 
         <View style={styles.card}>
           <View style={styles.sliderCardContent}>
             <PercentSlider
-              value={speechSpeed}
-              onChange={setSpeechSpeed}
+              value={speechSpeedPercent}
+              onChange={(next) => updateAudioSettings({ speechSpeedPercent: next })}
               accessibilityLabel="Speech speed"
             />
+            <View style={styles.sliderLabels}>
+              <Text style={styles.sliderEdgeLabel}>Slower</Text>
+              <Text style={styles.sliderEdgeLabel}>Faster</Text>
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -112,13 +119,30 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.lg,
     minHeight: 64,
   },
-  rowLabel: {
+  rowCopy: {
     flex: 1,
+    gap: spacing.xs,
+  },
+  rowLabel: {
     ...typography.heading,
     color: colors.text,
+  },
+  rowHint: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   sliderCardContent: {
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.lg,
+    gap: spacing.sm,
+  },
+  sliderLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: spacing.xs,
+  },
+  sliderEdgeLabel: {
+    ...typography.body,
+    color: colors.textMuted,
   },
 });

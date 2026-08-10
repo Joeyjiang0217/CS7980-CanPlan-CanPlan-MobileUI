@@ -5,11 +5,10 @@ import { Fragment } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import {
-  startingPageRouteName,
-  useInterfaceSettings,
-} from '../features/settings/interfaceSettings';
+import { useInterfaceSettings } from '../features/settings/interfaceSettings';
+import { useMyProfile } from '../features/users/hooks/useMyProfile';
 import type { MainStackParamList } from '../navigation/types';
+import { rootRouteName } from '../navigation/rootRoute';
 import BackButton from '../shared/components/BackButton';
 import { colors, radius, shadow, spacing, typography } from '../shared/theme/tokens';
 
@@ -20,7 +19,7 @@ const APP_VERSION = '2.0.0';
 interface SettingsItem {
   label: string;
   /** Where tapping the row navigates. Omit for sections not built yet. */
-  route?: 'Interface' | 'Notifications' | 'AudioSpeech' | 'Statistics' | 'PrivacyPolicy';
+  route?: 'Interface' | 'Notifications' | 'AudioSpeech' | 'PrivacyPolicy';
 }
 
 // The settings hub. Only the rows with a `route` are wired up so far; the
@@ -30,7 +29,6 @@ const ITEMS: SettingsItem[] = [
   { label: 'Interface', route: 'Interface' },
   { label: 'Audio & Speech', route: 'AudioSpeech' },
   { label: 'iCloud Settings' },
-  { label: 'Statistics', route: 'Statistics' },
   { label: 'Privacy Policy', route: 'PrivacyPolicy' },
 ];
 
@@ -38,6 +36,9 @@ export default function SettingsScreen() {
   const navigation = useNavigation<SettingsNavigation>();
   const insets = useSafeAreaInsets();
   const { simpleMode, startingPage } = useInterfaceSettings();
+  // Cached by the navigation root's own fetch — read here so the back target
+  // respects the caregiver role (see rootRouteName).
+  const { data: profile } = useMyProfile();
 
   // Leaving Settings lands on the currently effective root. Two cases:
   //  - root unchanged (the common one — user tweaked ordinary settings):
@@ -47,7 +48,7 @@ export default function SettingsScreen() {
   //    animation reads fine here because the destination genuinely is a new
   //    screen.
   const handleBack = () => {
-    const targetRoot = simpleMode ? startingPageRouteName(startingPage) : 'Home';
+    const targetRoot = rootRouteName({ role: profile?.role, simpleMode, startingPage });
     const stackRoot = navigation.getState()?.routes[0]?.name;
     if (stackRoot === targetRoot) {
       navigation.popToTop();

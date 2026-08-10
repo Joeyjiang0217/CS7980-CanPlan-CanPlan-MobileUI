@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # `npm ci` over `npm install` so the lockfile is what gets installed.
+      - name: Install dependencies
+        run: npm ci
+
+      # The app has no eslint config; `lint` is tsc --noEmit, which is the real
+      # gate for a TypeScript React Native app.
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test

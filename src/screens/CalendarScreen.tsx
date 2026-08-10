@@ -46,6 +46,13 @@ import {
   useOccurrenceResolvedAt,
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
+import { buildDayRows, type DayRow } from '../features/assignments/buildDayRows';
+import {
+  bucketOf,
+  isResolvedAfterScheduled,
+  liveStatus,
+  type StatusKey,
+} from '../features/assignments/occurrenceStatus';
 import { describeRepeat } from '../features/assignments/repeat';
 import {
   getInterfaceSettings,
@@ -60,11 +67,7 @@ import { useTasksByOwner, useTaskSteps } from '../features/tasks/hooks/useTaskAp
 import { useSettingsTapGate } from '../shared/hooks/useSettingsTapGate';
 import type { MainStackParamList } from '../navigation/types';
 import { getCurrentUserId } from '../shared/api/authTokenProvider';
-import type {
-  TaskAssignment,
-  TaskInstanceStatus,
-  TaskInstanceView,
-} from '../shared/api/canplanTypes';
+import type { TaskAssignment, TaskInstanceView } from '../shared/api/canplanTypes';
 import BackButton from '../shared/components/BackButton';
 import CachedImage from '../shared/components/CachedImage';
 import ConfirmDialog from '../shared/components/ConfirmDialog';
@@ -103,23 +106,6 @@ function initialCalendarTab(): StatusKey {
 
 const NO_PAST_OVERDUE: TaskInstanceView[] = [];
 
-/** "2026-07-13" → "Sunday" (past-week group labels; unique within 7 days). */
-const weekdayName = (iso: string) => {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
-};
-
-/** "2026-07-13" → "Jul 13" (the date suffix on group labels). */
-const monthDay = (iso: string) => {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-  });
-};
-
-type StatusKey = 'overdue' | 'todo' | 'done' | 'skipped';
-
 const STATUS_TABS: Array<{ key: StatusKey; label: string }> = [
   { key: 'overdue', label: 'Overdue' },
   { key: 'todo', label: 'To Do' },
@@ -142,49 +128,6 @@ const STATUS_LABEL: Record<StatusKey, string> = {
 };
 
 /** Map a server status onto one of the four calendar buckets (CANCELLED is dropped). */
-function bucketOf(status: TaskInstanceStatus): StatusKey | null {
-  switch (status) {
-    case 'OVERDUE':
-      return 'overdue';
-    case 'TO_DO':
-    case 'IN_PROGRESS':
-      return 'todo';
-    case 'COMPLETED':
-      return 'done';
-    case 'SKIPPED':
-      return 'skipped';
-    default:
-      return null;
-  }
-}
-
-/**
- * Live display status. The server derives OVERDUE only at fetch time, and the
- * feed then sits in a 5-minute react-query cache — so an occurrence whose
- * scheduled moment passes while on screen would stay in To Do until the next
- * refetch. Re-derive against the wall clock with the same rule the server
- * (and the start-mirror below) applies: past scheduledFor and unresolved →
- * OVERDUE. Callers re-run off useMinuteTick so the flip happens live.
- */
-function liveStatus(
-  view: Pick<TaskInstanceView, 'scheduledFor'>,
-  status: TaskInstanceStatus,
-): TaskInstanceStatus {
-  if (status !== 'TO_DO' && status !== 'IN_PROGRESS') {
-    return status;
-  }
-  const scheduledMs = new Date(view.scheduledFor).getTime();
-  return Number.isFinite(scheduledMs) && Date.now() > scheduledMs ? 'OVERDUE' : status;
-}
-
-function isResolvedAfterScheduled(view: TaskInstanceView, resolvedAt?: string | null) {
-  if (!resolvedAt) {
-    return false;
-  }
-  const resolvedMs = new Date(resolvedAt).getTime();
-  const scheduledMs = new Date(view.scheduledFor).getTime();
-  return Number.isFinite(resolvedMs) && Number.isFinite(scheduledMs) && resolvedMs > scheduledMs;
-}
 
 // ── Date helpers (local, not UTC) ──────────────────────────────────────────────
 
@@ -513,10 +456,15 @@ function AssignmentCard({
   // a plain task: total comes from the task's steps, done from the backend's
   // instance step snapshots (virtual occurrences have none → 0 done).
   const stepsQuery = useTaskSteps(view.taskId);
-  const totalSteps = stepsQuery.data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0;
+  const templateStepCount =
+    stepsQuery.data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0;
   const instanceStepsQuery = useInstanceSteps(
     ownerId,
     view.isVirtual ? '' : view.instanceId ?? '',
+  );
+  const instanceStepCount = useMemo(
+    () => instanceStepsQuery.data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0,
+    [instanceStepsQuery.data],
   );
   const doneSteps = useMemo(() => {
     let count = 0;
@@ -529,6 +477,11 @@ function AssignmentCard({
     }
     return count;
   }, [instanceStepsQuery.data]);
+  // Count the occurrence's own steps once it has them, matching the frozen list
+  // behind the card. Counting the template instead could call a task fully done
+  // while a snapshot step sat unchecked — which the backend then refuses to
+  // complete, leaving the "All done!" button permanently failing.
+  const totalSteps = instanceStepCount > 0 ? instanceStepCount : templateStepCount;
   // Every step checked on a started occurrence (but not yet marked done).
   const allStepsDone = started && totalSteps > 0 && doneSteps >= totalSteps;
   const stepsLine = (
@@ -1458,39 +1411,8 @@ function DayAssignmentsPage({
     return result;
   }, [viewsQuery.data, statusOverrides, activeStatus, minuteTick]);
 
-  // Group the day's occurrences into hour slots (20:00 → "20:00 - 21:00") so
-  // times read as ranges under prominent slot headers.
-  const groups = useMemo(() => {
-    const byHour = new Map<number, TaskInstanceView[]>();
-    for (const view of views) {
-      const hour = Number(view.scheduledTime.split(':')[0]) || 0;
-      const list = byHour.get(hour);
-      if (list) {
-        list.push(view);
-      } else {
-        byHour.set(hour, [view]);
-      }
-    }
-    return [...byHour.entries()].sort((a, b) => a[0] - b[0]);
-  }, [views]);
-
   const isLoading = viewsQuery.isLoading || !ownerId;
   const todayISO = toISODate(today);
-
-  type DayRow =
-    | { kind: 'loading'; key: string }
-    | { kind: 'message'; key: string; message: string }
-    | { kind: 'header'; key: string; hour: number }
-    | {
-        kind: 'dayheader';
-        key: string;
-        dayISO: string;
-        label: string;
-        /** "started/total" for the group, QQ-roster style. */
-        count: string;
-        expanded: boolean;
-      }
-    | { kind: 'task'; key: string; view: TaskInstanceView };
 
   // Collapsible past-day groups: an explicit tap wins; otherwise only the
   // default group is open. Session-only by design (resets on relaunch).
@@ -1505,89 +1427,29 @@ function DayAssignmentsPage({
     });
   }, []);
 
-  const rows = useMemo<DayRow[]>(() => {
-    // Show Overdue mode appends the past week's unresolved occurrences as
-    // collapsible per-day groups, most recent day first (today's own
-    // hour-slot groups stay on top, ungrouped).
-    const pastRows: DayRow[] = [];
-    if (activeStatus === 'overdue' && pastOverdueViews.length > 0) {
-      const byDate = new Map<string, TaskInstanceView[]>();
-      for (const view of pastOverdueViews) {
-        const list = byDate.get(view.scheduledDate);
-        if (list) {
-          list.push(view);
-        } else {
-          byDate.set(view.scheduledDate, [view]);
-        }
-      }
-      const sortedDays = [...byDate.keys()].sort().reverse();
-      // Today's overdue already sits expanded above, so a default-open group
-      // is only offered when today has none: the newest non-empty past day.
-      const defaultExpandedDay = views.length > 0 ? null : sortedDays[0] ?? null;
-      const yesterdayISO = toISODate(addDays(today, -1));
-      for (const dayISO of sortedDays) {
-        const dayViews = byDate.get(dayISO)!;
-        dayViews.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
-        const startedCount = dayViews.filter(
-          (view) =>
-            !view.isVirtual ||
-            instanceIdOverrides.has(
-              occurrenceKey(view.assignmentId, view.scheduledDate, view.scheduledTime),
-            ),
-        ).length;
-        const expanded = groupToggles.get(dayISO) ?? dayISO === defaultExpandedDay;
-        pastRows.push({
-          kind: 'dayheader',
-          key: `day-${dayISO}`,
-          dayISO,
-          label: `${dayISO === yesterdayISO ? 'Yesterday' : weekdayName(dayISO)} · ${monthDay(dayISO)}`,
-          count: `${startedCount}/${dayViews.length}`,
-          expanded,
-        });
-        if (expanded) {
-          for (const view of dayViews) {
-            pastRows.push({
-              kind: 'task',
-              key: `${view.assignmentId}-${view.scheduledFor}`,
-              view,
-            });
-          }
-        }
-      }
-    }
-
-    if (isLoading) return [{ kind: 'loading', key: 'loading' }];
-    if (viewsQuery.isError) {
-      return [{ kind: 'message', key: 'error', message: 'Could not load this day’s tasks.' }];
-    }
-    if (views.length === 0 && pastRows.length === 0) {
-      return [{ kind: 'message', key: 'empty', message: 'Nothing here for this day.' }];
-    }
-
-    const nextRows: DayRow[] = [];
-    for (const [hour, groupViews] of groups) {
-      nextRows.push({ kind: 'header', key: `header-${hour}`, hour });
-      for (const view of groupViews) {
-        nextRows.push({
-          kind: 'task',
-          key: `${view.assignmentId}-${view.scheduledFor}`,
-          view,
-        });
-      }
-    }
-    nextRows.push(...pastRows);
-    return nextRows;
-  }, [
-    groups,
-    isLoading,
-    views.length,
-    viewsQuery.isError,
-    activeStatus,
-    pastOverdueViews,
-    today,
-    groupToggles,
-    instanceIdOverrides,
-  ]);
+  const rows = useMemo(
+    () =>
+      buildDayRows({
+        views,
+        pastOverdueViews,
+        activeStatus,
+        isLoading,
+        isError: viewsQuery.isError,
+        yesterdayISO: toISODate(addDays(today, -1)),
+        groupToggles,
+        startedInstanceIds: instanceIdOverrides,
+      }),
+    [
+      views,
+      pastOverdueViews,
+      activeStatus,
+      isLoading,
+      viewsQuery.isError,
+      today,
+      groupToggles,
+      instanceIdOverrides,
+    ],
+  );
 
   // Pin hour-slot and day-group headers while their section scrolls
   // (QQ-roster style; an incoming header pushes the stuck one out).

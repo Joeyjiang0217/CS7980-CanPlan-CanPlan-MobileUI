@@ -47,7 +47,6 @@ export type MainStackParamList = {
   Interface: undefined;
   Notifications: undefined;
   AudioSpeech: undefined;
-  Statistics: undefined;
   PrivacyPolicy: undefined;
   /** With `ownerId` (caregiver delegated): a linked primary user's categories. */
   Categories: { ownerId?: string; managingName?: string } | undefined;
@@ -157,8 +156,6 @@ export type MainStackParamList = {
     ownerId?: string;
     managingName?: string;
   };
-  /** Supporter-only: pick which cared-for user's reports to view. */
-  ReportPeople: undefined;
   /** Report history + generation for one cared-for user. */
   Reports: { userId: string; displayName: string };
   ReportView: { userId: string; reportId: string };

@@ -24,8 +24,6 @@ export interface InterfaceSettings {
   useCategories: boolean;
   showOverdue: boolean;
   onlyToday: boolean;
-  /** Task icon size slider, 0–100. */
-  iconSizePercent: number;
 }
 
 export const INTERFACE_SETTINGS_DEFAULTS: InterfaceSettings = {
@@ -35,7 +33,6 @@ export const INTERFACE_SETTINGS_DEFAULTS: InterfaceSettings = {
   useCategories: true,
   showOverdue: false,
   onlyToday: false,
-  iconSizePercent: 50,
 };
 
 const STORAGE_KEY = 'canplan.settings.interface';
@@ -56,8 +53,12 @@ function subscribe(listener: () => void) {
   };
 }
 
-/** Merge a stored blob over the defaults, dropping unknown/mistyped values. */
-function sanitize(stored: unknown): InterfaceSettings {
+/**
+ * Merge a stored blob over the defaults, dropping unknown/mistyped values.
+ * Exported for tests: this is what makes removing a setting safe, so its
+ * tolerance of older blobs is worth pinning down.
+ */
+export function sanitize(stored: unknown): InterfaceSettings {
   const result = { ...INTERFACE_SETTINGS_DEFAULTS };
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
     return result;
@@ -76,12 +77,6 @@ function sanitize(stored: unknown): InterfaceSettings {
     if (typeof raw[key] === 'boolean') {
       result[key] = raw[key];
     }
-  }
-  if (
-    typeof raw.iconSizePercent === 'number' &&
-    Number.isFinite(raw.iconSizePercent)
-  ) {
-    result.iconSizePercent = Math.min(100, Math.max(0, raw.iconSizePercent));
   }
   // Coherence: Categories can't be the starting page while categories are
   // disabled (the settings screen enforces this too; this guards old blobs).

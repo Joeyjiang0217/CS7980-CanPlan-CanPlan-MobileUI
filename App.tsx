@@ -14,11 +14,11 @@ import { useSession } from './src/app/SessionContext';
 import { useCurrentUser } from './src/features/auth';
 import TaskReminderManager from './src/features/notifications/TaskReminderManager';
 import {
-  startingPageRouteName,
   useInterfaceSettings,
   useInterfaceSettingsHydrated,
 } from './src/features/settings/interfaceSettings';
 import { navigationRef } from './src/navigation/navigationRef';
+import { rootRouteName } from './src/navigation/rootRoute';
 import { useMyProfile } from './src/features/users/hooks/useMyProfile';
 import CreateAccountScreen from './src/screens/auth/CreateAccountScreen';
 import ForgotPasswordResetScreen from './src/screens/auth/ForgotPasswordResetScreen';
@@ -35,12 +35,10 @@ import InterfaceSettingsScreen from './src/screens/InterfaceSettingsScreen';
 import NotificationsSettingsScreen from './src/screens/NotificationsSettingsScreen';
 import PrivacyPolicySettingsScreen from './src/screens/PrivacyPolicySettingsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
-import StatisticsSettingsScreen from './src/screens/StatisticsSettingsScreen';
 import CategoriesScreen from './src/screens/categories/CategoriesScreen';
 import ReportsScreen from './src/screens/reports/ReportsScreen';
 import ReportPreviewScreen from './src/screens/reports/ReportPreviewScreen';
 import ReportViewScreen from './src/screens/reports/ReportViewScreen';
-import SelectPersonScreen from './src/screens/reports/SelectPersonScreen';
 import AllTasksScreen from './src/screens/tasks/AllTasksScreen';
 import CreateTaskScreen from './src/screens/tasks/CreateTaskScreen';
 import CreateTaskStepScreen from './src/screens/tasks/CreateTaskStepScreen';
@@ -108,11 +106,11 @@ function RootStack() {
       initialRouteName={
         // Caregivers land on their own dashboard (list of linked primary users);
         // role comes from the real profile, so there is no manual role chooser.
-        profile?.role === 'SUPPORT_PERSON'
-          ? 'CaregiverHome'
-          : interfaceSettings.simpleMode
-            ? startingPageRouteName(interfaceSettings.startingPage)
-            : 'Home'
+        rootRouteName({
+          role: profile?.role,
+          simpleMode: interfaceSettings.simpleMode,
+          startingPage: interfaceSettings.startingPage,
+        })
       }
     >
       {!isAuthed ? (
@@ -138,7 +136,6 @@ function RootStack() {
           <Stack.Screen name="Interface" component={InterfaceSettingsScreen} />
           <Stack.Screen name="Notifications" component={NotificationsSettingsScreen} />
           <Stack.Screen name="AudioSpeech" component={AudioSpeechSettingsScreen} />
-          <Stack.Screen name="Statistics" component={StatisticsSettingsScreen} />
           <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicySettingsScreen} />
           <Stack.Screen name="Categories" component={CategoriesScreen} />
           <Stack.Screen name="AllTasks" component={AllTasksScreen} />
@@ -156,7 +153,6 @@ function RootStack() {
           <Stack.Screen name="ScheduleAssignment" component={ScheduleAssignmentScreen} />
           <Stack.Screen name="OccurrenceDetail" component={OccurrenceDetailScreen} />
           <Stack.Screen name="StepDetail" component={StepDetailScreen} />
-          <Stack.Screen name="ReportPeople" component={SelectPersonScreen} />
           <Stack.Screen name="Reports" component={ReportsScreen} />
           <Stack.Screen name="ReportPreview" component={ReportPreviewScreen} />
           <Stack.Screen name="ReportView" component={ReportViewScreen} />
