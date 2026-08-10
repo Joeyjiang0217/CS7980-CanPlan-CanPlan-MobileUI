@@ -36,6 +36,7 @@ import {
   useInstanceSteps,
   useSetInstanceStepCompletion,
 } from '../../features/assignments/hooks/useAssignments';
+import { speechRateFor, useAudioSettings } from '../../features/settings/audioSettings';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
 import { useCachedMediaUri } from '../../features/media/hooks/useCachedMedia';
 import { useTask } from '../../features/tasks/hooks/useTask';
@@ -364,6 +365,7 @@ export default function StepDetailScreen() {
   const audioStatus = useAudioPlayerStatus(audioPlayer);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const isPlaying = hasAudio ? audioStatus.playing : isSpeaking;
+  const { autoPlayStepSounds, speechSpeedPercent } = useAudioSettings();
 
   useEffect(() => {
     void setAudioModeAsync({ playsInSilentMode: true });
@@ -404,34 +406,74 @@ export default function StepDetailScreen() {
     }
   }, [step, navigation]);
 
-  const togglePlayback = useCallback(() => {
+  // Split from the toggle so auto-play can start a step without the risk of
+  // silencing one that is already reading.
+  const startPlayback = useCallback(() => {
     if (!step) {
-      return;
-    }
-    if (isPlaying) {
-      if (hasAudio) {
-        audioPlayer.pause();
-      } else {
-        void Speech.stop();
-        setIsSpeaking(false);
-      }
       return;
     }
     if (hasAudio) {
       if (!audioUri) {
         return;
       }
+      // Recorded audio plays at its own speed — the speech-speed setting is for
+      // the synthesiser, and rating a real voice up shifts its pitch.
       audioPlayer.play();
     } else {
       void Speech.stop();
       setIsSpeaking(true);
       Speech.speak(step.text, {
+        rate: speechRateFor(speechSpeedPercent),
         onDone: () => setIsSpeaking(false),
         onStopped: () => setIsSpeaking(false),
         onError: () => setIsSpeaking(false),
       });
     }
-  }, [step, isPlaying, hasAudio, audioPlayer, audioUri]);
+  }, [step, hasAudio, audioPlayer, audioUri, speechSpeedPercent]);
+
+  const stopPlayback = useCallback(() => {
+    if (hasAudio) {
+      audioPlayer.pause();
+    } else {
+      void Speech.stop();
+      setIsSpeaking(false);
+    }
+  }, [hasAudio, audioPlayer]);
+
+  const togglePlayback = useCallback(() => {
+    if (isPlaying) {
+      stopPlayback();
+    } else {
+      startPlayback();
+    }
+  }, [isPlaying, startPlayback, stopPlayback]);
+
+  // Automatically Play Step Sounds: read the step the player has settled on,
+  // once per arrival. The same settle delay the timer uses keeps pages that were
+  // skimmed past (rapid check-offs, held arrow taps) from each firing a burst of
+  // speech that the next page immediately cuts off.
+  const autoPlayedStepRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    autoPlayedStepRef.current = undefined;
+  }, [activeStepId]);
+  useEffect(() => {
+    if (!autoPlayStepSounds || !activeStepId) {
+      return;
+    }
+    // A recording's local URI resolves asynchronously; this re-runs once it
+    // lands, so a slow download only delays the reading rather than skipping it.
+    if (hasAudio && !audioUri) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (autoPlayedStepRef.current === activeStepId) {
+        return;
+      }
+      autoPlayedStepRef.current = activeStepId;
+      startPlayback();
+    }, TIMING_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [autoPlayStepSounds, activeStepId, hasAudio, audioUri, startPlayback]);
 
   // ── Player chrome: swipe counter + arrow navigation ───────────────────────
   const pagerRef = useAnimatedRef<FlatList<TaskStep>>();

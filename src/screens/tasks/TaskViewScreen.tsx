@@ -29,6 +29,7 @@ import {
   useStartTaskInstance,
   useUpdateInstanceStatus,
 } from '../../features/assignments/hooks/useAssignments';
+import { speechRateFor, useAudioSettings } from '../../features/settings/audioSettings';
 import { getCurrentUserId } from '../../shared/api/authTokenProvider';
 import type { PersistedTaskInstanceStatus } from '../../shared/api/canplanTypes';
 import { useCachedMediaUri } from '../../features/media/hooks/useCachedMedia';
@@ -195,6 +196,7 @@ function StepCard({
 
   // Text-to-speech fallback for steps that have no recording.
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const { speechSpeedPercent } = useAudioSettings();
 
   // Single source of truth both speaker controls render from.
   const isPlaying = hasAudio ? audioStatus.playing : isSpeaking;
@@ -245,6 +247,7 @@ function StepCard({
       void Speech.stop();
       setIsSpeaking(true);
       Speech.speak(`Step ${index + 1}. ${step.text}`, {
+        rate: speechRateFor(speechSpeedPercent),
         onDone: () => {
           setIsSpeaking(false);
           onDeactivate(step.stepId);
@@ -256,7 +259,7 @@ function StepCard({
         },
       });
     }
-  }, [isPlaying, hasAudio, audioPlayer, audioUri, onActivate, onDeactivate, step.stepId, step.text, index]);
+  }, [isPlaying, hasAudio, audioPlayer, audioUri, onActivate, onDeactivate, step.stepId, step.text, index, speechSpeedPercent]);
 
   return (
     <View style={styles.stepCard}>
