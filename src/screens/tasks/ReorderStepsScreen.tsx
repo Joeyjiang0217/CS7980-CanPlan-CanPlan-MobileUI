@@ -16,6 +16,7 @@ import {
   useTaskSteps,
 } from '../../features/tasks/hooks/useTaskApi';
 import type { MainStackParamList } from '../../navigation/types';
+import { reorderCachedStepPages } from '../../features/tasks/reorderCachedStepPages';
 import type { Connection, TaskStep } from '../../shared/api/canplanTypes';
 import ConfirmDialog from '../../shared/components/ConfirmDialog';
 import { queryKeys } from '../../shared/query/queryKeys';
@@ -25,34 +26,6 @@ type ReorderStepsNavigation = NativeStackNavigationProp<MainStackParamList, 'Reo
 type ReorderStepsRoute = RouteProp<MainStackParamList, 'ReorderSteps'>;
 
 const TASK_STEPS_QUERY_LIMIT = 50;
-
-function reorderCachedStepPages(
-  cached: InfiniteData<Connection<TaskStep>> | undefined,
-  orderedSteps: TaskStep[],
-) {
-  const reorderedSteps = orderedSteps.map((step, index) => ({
-    ...step,
-    order: index + 1,
-  }));
-
-  if (!cached) {
-    return {
-      pages: [{ items: reorderedSteps, nextToken: null }],
-      pageParams: [undefined],
-    };
-  }
-
-  let cursor = 0;
-  return {
-    ...cached,
-    pages: cached.pages.map((page) => {
-      const pageSize = page.items.length;
-      const items = reorderedSteps.slice(cursor, cursor + pageSize);
-      cursor += pageSize;
-      return { ...page, items };
-    }),
-  };
-}
 
 export default function ReorderStepsScreen() {
   const navigation = useNavigation<ReorderStepsNavigation>();

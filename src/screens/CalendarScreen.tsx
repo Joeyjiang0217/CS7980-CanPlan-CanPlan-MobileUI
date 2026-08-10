@@ -46,6 +46,12 @@ import {
   useOccurrenceResolvedAt,
   useOccurrenceStatuses,
 } from '../features/assignments/occurrenceCompletion';
+import {
+  bucketOf,
+  isResolvedAfterScheduled,
+  liveStatus,
+  type StatusKey,
+} from '../features/assignments/occurrenceStatus';
 import { describeRepeat } from '../features/assignments/repeat';
 import {
   getInterfaceSettings,
@@ -60,11 +66,7 @@ import { useTasksByOwner, useTaskSteps } from '../features/tasks/hooks/useTaskAp
 import { useSettingsTapGate } from '../shared/hooks/useSettingsTapGate';
 import type { MainStackParamList } from '../navigation/types';
 import { getCurrentUserId } from '../shared/api/authTokenProvider';
-import type {
-  TaskAssignment,
-  TaskInstanceStatus,
-  TaskInstanceView,
-} from '../shared/api/canplanTypes';
+import type { TaskAssignment, TaskInstanceView } from '../shared/api/canplanTypes';
 import BackButton from '../shared/components/BackButton';
 import CachedImage from '../shared/components/CachedImage';
 import ConfirmDialog from '../shared/components/ConfirmDialog';
@@ -118,8 +120,6 @@ const monthDay = (iso: string) => {
   });
 };
 
-type StatusKey = 'overdue' | 'todo' | 'done' | 'skipped';
-
 const STATUS_TABS: Array<{ key: StatusKey; label: string }> = [
   { key: 'overdue', label: 'Overdue' },
   { key: 'todo', label: 'To Do' },
@@ -142,49 +142,6 @@ const STATUS_LABEL: Record<StatusKey, string> = {
 };
 
 /** Map a server status onto one of the four calendar buckets (CANCELLED is dropped). */
-function bucketOf(status: TaskInstanceStatus): StatusKey | null {
-  switch (status) {
-    case 'OVERDUE':
-      return 'overdue';
-    case 'TO_DO':
-    case 'IN_PROGRESS':
-      return 'todo';
-    case 'COMPLETED':
-      return 'done';
-    case 'SKIPPED':
-      return 'skipped';
-    default:
-      return null;
-  }
-}
-
-/**
- * Live display status. The server derives OVERDUE only at fetch time, and the
- * feed then sits in a 5-minute react-query cache — so an occurrence whose
- * scheduled moment passes while on screen would stay in To Do until the next
- * refetch. Re-derive against the wall clock with the same rule the server
- * (and the start-mirror below) applies: past scheduledFor and unresolved →
- * OVERDUE. Callers re-run off useMinuteTick so the flip happens live.
- */
-function liveStatus(
-  view: Pick<TaskInstanceView, 'scheduledFor'>,
-  status: TaskInstanceStatus,
-): TaskInstanceStatus {
-  if (status !== 'TO_DO' && status !== 'IN_PROGRESS') {
-    return status;
-  }
-  const scheduledMs = new Date(view.scheduledFor).getTime();
-  return Number.isFinite(scheduledMs) && Date.now() > scheduledMs ? 'OVERDUE' : status;
-}
-
-function isResolvedAfterScheduled(view: TaskInstanceView, resolvedAt?: string | null) {
-  if (!resolvedAt) {
-    return false;
-  }
-  const resolvedMs = new Date(resolvedAt).getTime();
-  const scheduledMs = new Date(view.scheduledFor).getTime();
-  return Number.isFinite(resolvedMs) && Number.isFinite(scheduledMs) && resolvedMs > scheduledMs;
-}
 
 // ── Date helpers (local, not UTC) ──────────────────────────────────────────────
 
