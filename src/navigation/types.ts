@@ -5,7 +5,7 @@
  * root (App.tsx) based on session state, not nested.
  */
 
-import type { TaskInstanceStatus } from '../shared/api/canplanTypes';
+import type { GeneratedReport, TaskInstanceStatus } from '../shared/api/canplanTypes';
 
 export type AuthStackParamList = {
   SignIn: undefined;
@@ -162,4 +162,9 @@ export type MainStackParamList = {
   /** Report history + generation for one cared-for user. */
   Reports: { userId: string; displayName: string };
   ReportView: { userId: string; reportId: string };
+  /**
+   * Unsaved report preview produced by `generateReport`. Carries the raw draft
+   * (AWSJSON fields kept as strings) so "Save report" can persist it verbatim.
+   */
+  ReportPreview: { userId: string; draft: GeneratedReport };
 };

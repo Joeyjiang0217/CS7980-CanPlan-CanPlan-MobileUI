@@ -48,8 +48,10 @@ export default function ReportsScreen() {
     generateMutation.mutate(
       { userId, from: isoDaysAgo(presetDays - 1), to: isoDaysAgo(0) },
       {
-        onSuccess: (report) =>
-          navigation.navigate('ReportView', { userId, reportId: report.reportId }),
+        // generateReport only previews (persists nothing) — show the draft, then
+        // the preview screen's "Save report" persists it.
+        onSuccess: (draft) =>
+          navigation.navigate('ReportPreview', { userId, draft }),
         onError: (error: unknown) =>
           Alert.alert(
             'Could not generate the report',

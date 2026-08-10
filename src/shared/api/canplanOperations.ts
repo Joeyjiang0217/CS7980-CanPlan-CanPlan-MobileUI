@@ -470,7 +470,15 @@ export const GENERATE_TASK_STEPS = /* GraphQL */ `
 
 export const GENERATE_REPORT = /* GraphQL */ `
   mutation GenerateReport($input: GenerateReportInput!) {
-    generateReport(input: $input) { ${REPORT_FIELDS} }
+    generateReport(input: $input) {
+      draftToken scope dateRange generatedAt narrative stats
+    }
+  }
+`;
+
+export const SAVE_REPORT = /* GraphQL */ `
+  mutation SaveReport($input: SaveReportInput!) {
+    saveReport(input: $input) { ${REPORT_FIELDS} }
   }
 `;
 

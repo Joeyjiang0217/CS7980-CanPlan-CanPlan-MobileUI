@@ -8,10 +8,16 @@ import {
 import { canPlanApi } from '../../../shared/api/canplanApi';
 import type {
   GenerateReportInput,
+  SaveReportInput,
   SupportLink,
 } from '../../../shared/api/canplanTypes';
 import { queryKeys } from '../../../shared/query/queryKeys';
-import { fetchReportDocument, generateReport, listReports } from '../api/reportApi';
+import {
+  fetchReportDocument,
+  generateReport,
+  listReports,
+  saveReport,
+} from '../api/reportApi';
 
 /** Paginated report history for one cared-for user, newest first. */
 export function useReports(userId: string, limit = 20) {
@@ -24,19 +30,31 @@ export function useReports(userId: string, limit = 20) {
   });
 }
 
-/** Generates a report. Synchronous on the backend — can take tens of seconds. */
+/**
+ * Generates a report PREVIEW (persists nothing). Synchronous on the backend —
+ * expect a few seconds of latency (one AI call). Returns a `GeneratedReport`
+ * draft; persist it with `useSaveReport`.
+ */
 export function useGenerateReport() {
+  return useMutation({
+    mutationFn: (input: GenerateReportInput) => generateReport(input),
+  });
+}
+
+/** Persists a generated draft, then refreshes the user's report list. */
+export function useSaveReport() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    // Generate-and-persist in one backend call; returns the saved Report so
-    // callers get a reportId to navigate to.
-    mutationFn: (input: GenerateReportInput) => generateReport(input),
-    onSuccess: (_report, input) => {
-      // Prefix-invalidate every page-size variant of this user's report list.
-      void queryClient.invalidateQueries({
-        queryKey: ['reports', 'list', input.userId],
-      });
+    mutationFn: (input: SaveReportInput) => saveReport(input),
+    onSuccess: (report) => {
+      const userId = report.scope?.userId;
+      if (userId) {
+        // Prefix-invalidate every page-size variant of this user's report list.
+        void queryClient.invalidateQueries({
+          queryKey: ['reports', 'list', userId],
+        });
+      }
     },
   });
 }

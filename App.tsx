@@ -38,6 +38,7 @@ import SettingsScreen from './src/screens/SettingsScreen';
 import StatisticsSettingsScreen from './src/screens/StatisticsSettingsScreen';
 import CategoriesScreen from './src/screens/categories/CategoriesScreen';
 import ReportsScreen from './src/screens/reports/ReportsScreen';
+import ReportPreviewScreen from './src/screens/reports/ReportPreviewScreen';
 import ReportViewScreen from './src/screens/reports/ReportViewScreen';
 import SelectPersonScreen from './src/screens/reports/SelectPersonScreen';
 import AllTasksScreen from './src/screens/tasks/AllTasksScreen';
@@ -157,6 +158,7 @@ function RootStack() {
           <Stack.Screen name="StepDetail" component={StepDetailScreen} />
           <Stack.Screen name="ReportPeople" component={SelectPersonScreen} />
           <Stack.Screen name="Reports" component={ReportsScreen} />
+          <Stack.Screen name="ReportPreview" component={ReportPreviewScreen} />
           <Stack.Screen name="ReportView" component={ReportViewScreen} />
         </>
       )}

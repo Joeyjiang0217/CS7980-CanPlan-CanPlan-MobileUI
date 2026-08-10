@@ -599,6 +599,34 @@ export interface GenerateReportInput {
   to: string;
 }
 
+/**
+ * A freshly generated, UNSAVED report — the output of `generateReport`. Nothing
+ * is persisted. `scope`/`dateRange`/`stats` stay as raw AWSJSON strings so this
+ * exact content can be handed straight back to `saveReport` (the `draftToken`
+ * signs it); parse copies for rendering rather than mutating these strings.
+ */
+export interface GeneratedReport {
+  draftToken: string;
+  scope: string;
+  dateRange: string;
+  generatedAt: string;
+  narrative: string;
+  stats: string;
+}
+
+/**
+ * Persist a previously generated report. Re-submit the EXACT content returned by
+ * `generateReport` (the raw AWSJSON strings, unchanged) plus its `draftToken`.
+ */
+export interface SaveReportInput {
+  draftToken: string;
+  scope: string;
+  dateRange: string;
+  generatedAt: string;
+  narrative: string;
+  stats: string;
+}
+
 /** Deterministic statistics computed by the backend over a date range. */
 export interface ReportStats {
   meta: {
