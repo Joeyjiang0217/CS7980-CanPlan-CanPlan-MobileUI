@@ -8,8 +8,6 @@ progress from the same app.
 Built with **React Native + TypeScript + Expo**, backed by **AWS AppSync
 (GraphQL)**, **Cognito**, and **S3**.
 
-🎥 **Demo video:** _[add your YouTube link here]_
-
 ---
 
 ## Team & my contributions
